@@ -16,6 +16,8 @@ import {
   MenuItem,
   Paper,
   Stack,
+  Tab,
+  Tabs,
   Table,
   TableBody,
   TableCell,
@@ -105,9 +107,13 @@ function roleDescription(roleKey: string) {
 
 export function UsersPage() {
   const queryClient = useQueryClient();
+  const [tab, setTab] = useState<"users" | "roles">("users");
   const [open, setOpen] = useState(false);
+  const [roleOpen, setRoleOpen] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
+  const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [form, setForm] = useState<UserForm>(emptyForm);
+  const [roleForm, setRoleForm] = useState({ name: "", description: "" });
 
   const query = useQuery({
     queryKey: ["users-admin"],
@@ -177,7 +183,27 @@ export function UsersPage() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["users-admin"] });
+      await queryClient.invalidateQueries({ queryKey: ["current-user-profile"] });
       setOpen(false);
+    }
+  });
+
+  const saveRole = useMutation({
+    mutationFn: async () => {
+      if (!editingRole) throw new Error("Selecciona un rol.");
+      const { error } = await supabase
+        .from("roles")
+        .update({
+          name: roleForm.name.trim(),
+          description: roleForm.description.trim() || null
+        })
+        .eq("id", editingRole.id);
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["users-admin"] });
+      await queryClient.invalidateQueries({ queryKey: ["current-user-profile"] });
+      setRoleOpen(false);
     }
   });
 
@@ -185,6 +211,12 @@ export function UsersPage() {
     setEditing(null);
     setForm(emptyForm);
     setOpen(true);
+  }
+
+  function startEditRole(role: Role) {
+    setEditingRole(role);
+    setRoleForm({ name: role.name, description: role.description ?? "" });
+    setRoleOpen(true);
   }
 
   function toggleRole(roleId: string) {
@@ -223,17 +255,23 @@ export function UsersPage() {
           <IconButton onClick={() => query.refetch()} aria-label="refrescar usuarios">
             <RefreshIcon />
           </IconButton>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={startCreate}>
+          {tab === "users" && <Button variant="contained" startIcon={<AddIcon />} onClick={startCreate}>
             Nuevo usuario
-          </Button>
+          </Button>}
         </Stack>
       </Stack>
+
+      <Tabs value={tab} onChange={(_, value) => setTab(value)}>
+        <Tab value="users" label="Usuarios" />
+        <Tab value="roles" label="Roles" />
+      </Tabs>
 
       {query.isLoading && <LinearProgress />}
       {query.error && <Alert severity="error">{query.error.message}</Alert>}
       {save.error && <Alert severity="error">{save.error.message}</Alert>}
+      {saveRole.error && <Alert severity="error">{saveRole.error.message}</Alert>}
 
-      <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
+      {tab === "users" && <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -278,7 +316,38 @@ export function UsersPage() {
             ))}
           </TableBody>
         </Table>
-      </TableContainer>
+      </TableContainer>}
+
+      {tab === "roles" && (
+        <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Rol</TableCell>
+                <TableCell>Llave de sistema</TableCell>
+                <TableCell>Descripcion</TableCell>
+                <TableCell align="right">Acciones</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {(query.data?.roles ?? []).map((role) => (
+                <TableRow key={role.id} hover>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>{role.name}</Typography>
+                  </TableCell>
+                  <TableCell><Chip size="small" label={role.key} variant="outlined" /></TableCell>
+                  <TableCell>{role.description || roleDescription(role.key)}</TableCell>
+                  <TableCell align="right">
+                    <IconButton size="small" onClick={() => startEditRole(role)} aria-label="editar rol">
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>{editing ? "Editar usuario" : "Nuevo usuario"}</DialogTitle>
@@ -414,6 +483,39 @@ export function UsersPage() {
           <Button onClick={() => setOpen(false)}>Cancelar</Button>
           <Button variant="contained" onClick={() => save.mutate()} disabled={save.isPending || (!editing && form.password.length < 8) || form.role_ids.length === 0}>
             Guardar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={roleOpen} onClose={() => setRoleOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Editar rol</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.8} sx={{ pt: 1 }}>
+            <TextField label="Llave de sistema" value={editingRole?.key ?? ""} fullWidth disabled />
+            <TextField
+              label="Nombre"
+              value={roleForm.name}
+              onChange={(event) => setRoleForm((current) => ({ ...current, name: event.target.value }))}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Descripcion"
+              value={roleForm.description}
+              onChange={(event) => setRoleForm((current) => ({ ...current, description: event.target.value }))}
+              fullWidth
+              multiline
+              minRows={3}
+            />
+            <Alert severity="info" variant="outlined">
+              La llave de sistema no se edita porque RLS y permisos usan esos valores internamente.
+            </Alert>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoleOpen(false)}>Cancelar</Button>
+          <Button variant="contained" onClick={() => saveRole.mutate()} disabled={saveRole.isPending || !roleForm.name.trim()}>
+            Guardar rol
           </Button>
         </DialogActions>
       </Dialog>

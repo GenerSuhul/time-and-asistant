@@ -38,6 +38,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
 import { NavLink, useNavigate } from "react-router-dom";
+import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
 import { useSession } from "../hooks/useSession";
 import { supabase } from "../lib/supabase";
 
@@ -79,6 +80,9 @@ export function AppLayout({ children }: PropsWithChildren) {
   const [desktopExpanded, setDesktopExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const { session } = useSession();
+  const currentUser = useCurrentUserProfile();
+  const currentName = displayName(currentUser.data);
+  const currentEmail = currentUser.data?.profile?.email ?? session?.user.email ?? "Sesion activa";
   const isExpanded = !isDesktop || desktopExpanded;
   const activeDesktopWidth = desktopExpanded ? desktopExpandedDrawerWidth : desktopDrawerWidth;
   const drawerWidth = isDesktop ? activeDesktopWidth : mobileDrawerWidth;
@@ -97,7 +101,7 @@ export function AppLayout({ children }: PropsWithChildren) {
 
   const logo = (
     <Stack alignItems="center" spacing={0.6}>
-      <Typography sx={{ fontSize: 27, fontWeight: 800, lineHeight: 0.9, letterSpacing: -1.5, color: "#111217" }}>
+      <Typography sx={{ fontSize: 27, fontWeight: 800, lineHeight: 0.9, letterSpacing: 0, color: "#111217" }}>
         ac
       </Typography>
       <Box sx={{ width: 22, height: 3, borderRadius: 999, bgcolor: "primary.main" }} />
@@ -186,22 +190,31 @@ export function AppLayout({ children }: PropsWithChildren) {
       <Divider />
       <Stack alignItems={isExpanded ? "flex-start" : "center"} sx={{ p: 2 }}>
         {!isExpanded ? (
-          <Tooltip title={session?.user.email ?? "Sesion activa"} placement="right">
-            <Avatar sx={{ width: 36, height: 36, bgcolor: "primary.main", fontSize: 13, fontWeight: 700 }}>
-              {(session?.user.email ?? "U").slice(0, 1).toUpperCase()}
+          <Tooltip title={`${currentName} - ${currentEmail}`} placement="right">
+            <Avatar
+              onClick={() => navigate("/settings")}
+              sx={{ width: 36, height: 36, bgcolor: "primary.main", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+            >
+              {currentName.slice(0, 1).toUpperCase()}
             </Avatar>
           </Tooltip>
         ) : (
-          <Stack direction="row" spacing={1.25} alignItems="center">
+          <Stack
+            direction="row"
+            spacing={1.25}
+            alignItems="center"
+            onClick={() => navigate("/settings")}
+            sx={{ cursor: "pointer", width: "100%", minWidth: 0 }}
+          >
             <Avatar sx={{ width: 34, height: 34, bgcolor: "primary.main", fontSize: 13, fontWeight: 700 }}>
-              {(session?.user.email ?? "U").slice(0, 1).toUpperCase()}
+              {currentName.slice(0, 1).toUpperCase()}
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
-                Administrador
+                {currentName}
               </Typography>
               <Typography variant="caption" color="text.secondary" noWrap>
-                {session?.user.email ?? "Sesion activa"}
+                {currentEmail}
               </Typography>
             </Box>
           </Stack>
