@@ -15,12 +15,22 @@ const schema = z.object({
   role_ids: z.array(z.string().uuid()).min(1)
 });
 
+async function assertRolesExist(supabase: ReturnType<typeof serviceClient>, roleIds: string[]) {
+  const { data, error } = await supabase.from("roles").select("id").in("id", roleIds);
+  if (error) throw error;
+  if ((data ?? []).length !== new Set(roleIds).size) {
+    throw new Error("Uno o mas roles seleccionados no existen en la base de datos");
+  }
+}
+
 async function replaceRoles(
   supabase: ReturnType<typeof serviceClient>,
   userId: string,
   roleIds: string[],
   companyId: string | null | undefined
 ) {
+  await assertRolesExist(supabase, roleIds);
+
   const { error: deleteError } = await supabase.from("user_roles").delete().eq("user_id", userId);
   if (deleteError) throw deleteError;
 
@@ -52,7 +62,13 @@ Deno.serve(async (req) => {
         email_confirm: true,
         user_metadata: { full_name: payload.full_name }
       });
-      if (createError) throw createError;
+      if (createError) {
+        const message = createError.message.toLowerCase();
+        if (message.includes("already") || message.includes("registered") || message.includes("exists")) {
+          throw new Error("Este correo ya existe. Usa el boton editar del usuario existente.");
+        }
+        throw createError;
+      }
       if (!created.user) throw new Error("User was not created");
 
       const { error: profileError } = await supabase.from("profiles").upsert({

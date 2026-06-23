@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   Box,
@@ -14,7 +14,6 @@ import {
   IconButton,
   LinearProgress,
   MenuItem,
-  OutlinedInput,
   Paper,
   Stack,
   Table,
@@ -31,7 +30,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { StatusChip } from "../components/StatusChip";
-import { supabase } from "../lib/supabase";
+import { supabase, supabaseFunctionUrl, supabasePublicAnonKey } from "../lib/supabase";
 
 type Role = {
   id: string;
@@ -93,6 +92,17 @@ function normalizeRole(value: Role | Role[] | null) {
   return Array.isArray(value) ? value[0] ?? null : value;
 }
 
+function roleDescription(roleKey: string) {
+  const descriptions: Record<string, string> = {
+    super_admin: "Acceso completo al sistema, usuarios y configuracion.",
+    it_admin: "Administracion tecnica, dispositivos, comandos y gateway.",
+    hr_admin: "Gestion de empleados, asistencia y reportes.",
+    branch_manager: "Visibilidad operativa por sucursal.",
+    viewer: "Solo lectura."
+  };
+  return descriptions[roleKey] ?? "Rol operativo del sistema.";
+}
+
 export function UsersPage() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -130,8 +140,6 @@ export function UsersPage() {
     }
   });
 
-  const roleById = useMemo(() => new Map((query.data?.roles ?? []).map((role) => [role.id, role])), [query.data?.roles]);
-
   const save = useMutation({
     mutationFn: async () => {
       const body = {
@@ -145,9 +153,23 @@ export function UsersPage() {
         role_company_id: form.role_company_id || null,
         role_ids: form.role_ids
       };
-      const { data, error } = await supabase.functions.invoke("admin-users", { body });
-      if (error) throw error;
-      if ((data as { error?: string } | null)?.error) throw new Error((data as { error: string }).error);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Sesion expirada. Vuelve a iniciar sesion.");
+
+      const response = await fetch(`${supabaseFunctionUrl}/admin-users`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: supabasePublicAnonKey,
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(body)
+      });
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok || data?.error) {
+        throw new Error(data?.error ?? `Error ${response.status} al guardar usuario`);
+      }
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["users-admin"] });
@@ -159,6 +181,15 @@ export function UsersPage() {
     setEditing(null);
     setForm(emptyForm);
     setOpen(true);
+  }
+
+  function toggleRole(roleId: string) {
+    setForm((current) => ({
+      ...current,
+      role_ids: current.role_ids.includes(roleId)
+        ? current.role_ids.filter((id) => id !== roleId)
+        : [...current.role_ids, roleId]
+    }));
   }
 
   function startEdit(user: UserRow) {
@@ -324,35 +355,48 @@ export function UsersPage() {
               </TextField>
             </Grid2>
             <Grid2 size={{ xs: 12 }}>
-              <TextField
-                select
-                label="Roles"
-                required
-                fullWidth
-                value={form.role_ids}
-                SelectProps={{
-                  multiple: true,
-                  input: <OutlinedInput label="Roles" />,
-                  renderValue: (selected) =>
-                    (selected as string[])
-                      .map((roleId) => roleById.get(roleId)?.name ?? roleId)
-                      .join(", ")
-                }}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setForm((current) => ({ ...current, role_ids: typeof value === "string" ? value.split(",") : value }));
-                }}
-              >
-                {(query.data?.roles ?? []).map((role) => (
-                  <MenuItem key={role.id} value={role.id}>
-                    <Checkbox checked={form.role_ids.includes(role.id)} size="small" />
-                    <Box>
-                      <Typography variant="body2" sx={{ fontWeight: 700 }}>{role.name}</Typography>
-                      <Typography variant="caption" color="text.secondary">{role.description}</Typography>
-                    </Box>
-                  </MenuItem>
-                ))}
-              </TextField>
+              <Stack spacing={1}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between">
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    Roles *
+                  </Typography>
+                  <Typography variant="caption" color={form.role_ids.length === 0 ? "error" : "text.secondary"}>
+                    {form.role_ids.length === 0 ? "Selecciona al menos un rol" : `${form.role_ids.length} seleccionado(s)`}
+                  </Typography>
+                </Stack>
+                <Grid2 container spacing={1.2}>
+                  {(query.data?.roles ?? []).map((role) => {
+                    const checked = form.role_ids.includes(role.id);
+                    return (
+                      <Grid2 key={role.id} size={{ xs: 12, md: 6 }}>
+                        <Paper
+                          variant="outlined"
+                          onClick={() => toggleRole(role.id)}
+                          sx={{
+                            p: 1.4,
+                            cursor: "pointer",
+                            boxShadow: "none",
+                            borderColor: checked ? "primary.main" : "divider",
+                            bgcolor: checked ? "rgba(79, 70, 229, 0.06)" : "#ffffff"
+                          }}
+                        >
+                          <Stack direction="row" spacing={1} alignItems="flex-start">
+                            <Checkbox checked={checked} onChange={() => toggleRole(role.id)} onClick={(event) => event.stopPropagation()} size="small" />
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                                {role.name}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {role.description || roleDescription(role.key)}
+                              </Typography>
+                            </Box>
+                          </Stack>
+                        </Paper>
+                      </Grid2>
+                    );
+                  })}
+                </Grid2>
+              </Stack>
             </Grid2>
             <Grid2 size={{ xs: 12 }}>
               <FormControlLabel

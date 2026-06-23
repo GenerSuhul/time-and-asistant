@@ -8,3 +8,5 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabaseFunctionUrl = `${supabaseUrl}/functions/v1`;
+export const supabasePublicAnonKey = supabaseAnonKey;
