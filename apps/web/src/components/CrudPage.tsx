@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -10,6 +10,7 @@ import {
   DialogTitle,
   FormControlLabel,
   IconButton,
+  InputAdornment,
   LinearProgress,
   MenuItem,
   Paper,
@@ -27,7 +28,9 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import SearchIcon from "@mui/icons-material/Search";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { StatusChip } from "./StatusChip";
 
@@ -74,10 +77,16 @@ function cleanPayload(values: Record<string, unknown>, fields: CrudField[]) {
 
 export function CrudPage({ title, table, columns, fields, orderBy = "created_at" }: CrudPageProps) {
   const queryClient = useQueryClient();
-  const [filter, setFilter] = useState("");
+  const [searchParams] = useSearchParams();
+  const incomingSearch = searchParams.get("search") ?? "";
+  const [filter, setFilter] = useState(incomingSearch);
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>(() => emptyForm(fields));
+
+  useEffect(() => {
+    setFilter(incomingSearch);
+  }, [incomingSearch]);
 
   const query = useQuery({
     queryKey: [table],
@@ -148,7 +157,19 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
         </Stack>
       </Stack>
 
-      <TextField size="small" label="Filtro" value={filter} onChange={(event) => setFilter(event.target.value)} />
+      <TextField
+        size="small"
+        label="Filtro"
+        value={filter}
+        onChange={(event) => setFilter(event.target.value)}
+        InputProps={{
+          startAdornment: (
+            <InputAdornment position="start">
+              <SearchIcon fontSize="small" />
+            </InputAdornment>
+          )
+        }}
+      />
       {query.isLoading && <LinearProgress />}
       {query.error && <Alert severity="error">{query.error.message}</Alert>}
       {!query.isLoading && rows.length === 0 && <Alert severity="info">No hay registros para mostrar.</Alert>}
