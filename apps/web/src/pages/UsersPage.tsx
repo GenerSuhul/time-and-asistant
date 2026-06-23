@@ -142,17 +142,21 @@ export function UsersPage() {
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = {
+      const body: Record<string, unknown> = {
         action: editing ? "update_user" : "create_user",
-        user_id: editing?.id,
         email: form.email.trim(),
-        password: form.password,
         full_name: form.full_name.trim(),
         status: form.status,
         company_id: form.company_id || null,
         role_company_id: form.role_company_id || null,
         role_ids: form.role_ids
       };
+      if (editing) {
+        body.user_id = editing.id;
+      } else {
+        body.password = form.password;
+      }
+
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("Sesion expirada. Vuelve a iniciar sesion.");
