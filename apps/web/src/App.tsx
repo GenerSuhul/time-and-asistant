@@ -22,6 +22,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ManualAdjustmentsPage } from "./pages/ManualAdjustmentsPage";
 import { RangeReportPage } from "./pages/RangeReportPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UsersPage } from "./pages/UsersPage";
 
 function Protected({ children }: { children: ReactNode }) {
   const { session, loading } = useSession();
@@ -55,6 +56,7 @@ export function App() {
       <Route path="/range-report" element={<Protected><RangeReportPage /></Protected>} />
       <Route path="/manual-adjustments" element={<Protected><ManualAdjustmentsPage /></Protected>} />
       <Route path="/audit" element={<Protected><AuditPage /></Protected>} />
+      <Route path="/users" element={<Protected><UsersPage /></Protected>} />
       <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
     </Routes>
   );

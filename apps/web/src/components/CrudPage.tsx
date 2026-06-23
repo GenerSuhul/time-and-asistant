@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  Grid2,
   IconButton,
   InputAdornment,
   LinearProgress,
@@ -37,10 +38,18 @@ import { StatusChip } from "./StatusChip";
 export type CrudField = {
   name: string;
   label: string;
-  type?: "text" | "number" | "date" | "time" | "datetime-local" | "boolean" | "select" | "textarea";
+  type?: "text" | "number" | "date" | "time" | "datetime-local" | "boolean" | "select" | "textarea" | "relation";
   required?: boolean;
   options?: string[];
   helperText?: string;
+  defaultValue?: unknown;
+  fullWidth?: boolean;
+  relation?: {
+    table: string;
+    labelColumn: string;
+    valueColumn?: string;
+    orderBy?: string;
+  };
 };
 
 export type CrudColumn = {
@@ -55,12 +64,13 @@ type CrudPageProps = {
   columns: CrudColumn[];
   fields: CrudField[];
   orderBy?: string;
+  select?: string;
 };
 
 type Row = Record<string, unknown> & { id: string };
 
 function emptyForm(fields: CrudField[]) {
-  return Object.fromEntries(fields.map((field) => [field.name, field.type === "boolean" ? false : ""]));
+  return Object.fromEntries(fields.map((field) => [field.name, field.defaultValue ?? (field.type === "boolean" ? false : "")]));
 }
 
 function cleanPayload(values: Record<string, unknown>, fields: CrudField[]) {
@@ -75,7 +85,7 @@ function cleanPayload(values: Record<string, unknown>, fields: CrudField[]) {
   );
 }
 
-export function CrudPage({ title, table, columns, fields, orderBy = "created_at" }: CrudPageProps) {
+export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select }: CrudPageProps) {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const incomingSearch = searchParams.get("search") ?? "";
@@ -83,17 +93,44 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>(() => emptyForm(fields));
+  const relationFields = useMemo(() => fields.filter((field) => field.type === "relation" && field.relation), [fields]);
 
   useEffect(() => {
     setFilter(incomingSearch);
   }, [incomingSearch]);
 
   const query = useQuery({
-    queryKey: [table],
+    queryKey: [table, orderBy, select],
     queryFn: async () => {
-      const { data, error } = await supabase.from(table).select("*").order(orderBy, { ascending: false });
+      const { data, error } = await supabase.from(table).select(select ?? "*").order(orderBy, { ascending: false });
       if (error) throw error;
-      return (data ?? []) as Row[];
+      return (data ?? []) as unknown as Row[];
+    }
+  });
+
+  const lookups = useQuery({
+    queryKey: ["crud-lookups", table, relationFields.map((field) => `${field.name}:${field.relation?.table}`).join("|")],
+    enabled: relationFields.length > 0,
+    queryFn: async () => {
+      const entries = await Promise.all(
+        relationFields.map(async (field) => {
+          const relation = field.relation!;
+          const valueColumn = relation.valueColumn ?? "id";
+          const { data, error } = await supabase
+            .from(relation.table)
+            .select(`${valueColumn},${relation.labelColumn}`)
+            .order(relation.orderBy ?? relation.labelColumn, { ascending: true });
+          if (error) throw error;
+          return [
+            field.name,
+            (data ?? []).map((row) => ({
+              value: String((row as unknown as Record<string, unknown>)[valueColumn] ?? ""),
+              label: String((row as unknown as Record<string, unknown>)[relation.labelColumn] ?? "")
+            }))
+          ] as const;
+        })
+      );
+      return Object.fromEntries(entries);
     }
   });
 
@@ -136,6 +173,15 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
     setEditing(row);
     setForm(Object.fromEntries(fields.map((field) => [field.name, row[field.name] ?? (field.type === "boolean" ? false : "")])));
     setOpen(true);
+  }
+
+  function cellValue(row: Row, name: string) {
+    const value = name.split(".").reduce<unknown>((current, key) => {
+      if (current && typeof current === "object") return (current as Record<string, unknown>)[key];
+      return undefined;
+    }, row);
+    if (typeof value === "boolean") return value ? "Si" : "No";
+    return String(value ?? "");
   }
 
   return (
@@ -189,7 +235,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
               <TableRow key={row.id} hover>
                 {columns.map((column) => (
                   <TableCell key={column.name}>
-                    {column.status ? <StatusChip value={String(row[column.name] ?? "")} /> : String(row[column.name] ?? "")}
+                    {column.status ? <StatusChip value={cellValue(row, column.name)} /> : cellValue(row, column.name)}
                   </TableCell>
                 ))}
                 <TableCell align="right">
@@ -209,42 +255,52 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>{editing ? "Editar" : "Nuevo"} {title}</DialogTitle>
         <DialogContent>
-          <Stack spacing={2} sx={{ pt: 1 }}>
+          <Grid2 container spacing={1.8} sx={{ pt: 1 }}>
             {fields.map((field) =>
               field.type === "boolean" ? (
-                <FormControlLabel
-                  key={field.name}
-                  control={
-                    <Checkbox
-                      checked={Boolean(form[field.name])}
-                      onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.checked }))}
-                    />
-                  }
-                  label={field.label}
-                />
+                <Grid2 key={field.name} size={{ xs: 12, md: field.fullWidth ? 12 : 6 }}>
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={Boolean(form[field.name])}
+                        onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.checked }))}
+                      />
+                    }
+                    label={field.label}
+                  />
+                </Grid2>
               ) : (
-                <TextField
-                  key={field.name}
-                  label={field.label}
-                  required={field.required}
-                  select={field.type === "select"}
-                  multiline={field.type === "textarea"}
-                  minRows={field.type === "textarea" ? 3 : undefined}
-                  type={field.type && field.type !== "select" && field.type !== "textarea" ? field.type : "text"}
-                  value={form[field.name] ?? ""}
-                  helperText={field.helperText}
-                  onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))}
-                  InputLabelProps={field.type === "date" || field.type === "time" || field.type === "datetime-local" ? { shrink: true } : undefined}
-                >
-                  {(field.options ?? []).map((option) => (
-                    <MenuItem key={option} value={option}>
-                      {option.replaceAll("_", " ")}
-                    </MenuItem>
-                  ))}
-                </TextField>
+                <Grid2 key={field.name} size={{ xs: 12, md: field.type === "textarea" || field.fullWidth ? 12 : 6 }}>
+                  <TextField
+                    label={field.label}
+                    required={field.required}
+                    select={field.type === "select" || field.type === "relation"}
+                    multiline={field.type === "textarea"}
+                    minRows={field.type === "textarea" ? 3 : undefined}
+                    type={field.type && !["select", "textarea", "relation"].includes(field.type) ? field.type : "text"}
+                    value={form[field.name] ?? ""}
+                    helperText={field.helperText}
+                    fullWidth
+                    onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))}
+                    InputLabelProps={field.type === "date" || field.type === "time" || field.type === "datetime-local" ? { shrink: true } : undefined}
+                  >
+                    {field.type === "relation" && !field.required && <MenuItem value="">Sin asignar</MenuItem>}
+                    {field.type === "relation"
+                      ? (lookups.data?.[field.name] ?? []).map((option) => (
+                          <MenuItem key={option.value} value={option.value}>
+                            {option.label}
+                          </MenuItem>
+                        ))
+                      : (field.options ?? []).map((option) => (
+                          <MenuItem key={option} value={option}>
+                            {option.replaceAll("_", " ")}
+                          </MenuItem>
+                        ))}
+                  </TextField>
+                </Grid2>
               )
             )}
-          </Stack>
+          </Grid2>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancelar</Button>
