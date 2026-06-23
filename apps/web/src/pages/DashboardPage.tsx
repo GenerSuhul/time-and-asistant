@@ -23,7 +23,6 @@ import type { ReactNode } from "react";
 import BadgeIcon from "@mui/icons-material/Badge";
 import DevicesIcon from "@mui/icons-material/Devices";
 import EventAvailableIcon from "@mui/icons-material/EventAvailable";
-import FactCheckIcon from "@mui/icons-material/FactCheck";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PersonSearchIcon from "@mui/icons-material/PersonSearch";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -83,7 +82,7 @@ const attendanceLabels: Record<string, string> = {
 };
 
 const attendancePalette: Record<string, string> = {
-  complete: "#14b8a6",
+  complete: "#4f46e5",
   late: "#f59e0b",
   incomplete: "#6366f1",
   absent: "#ef4444",
@@ -201,8 +200,8 @@ function formatTime(value: string) {
 
 function Panel({ children, title, action }: { children: ReactNode; title: string; action?: ReactNode }) {
   return (
-    <Paper variant="outlined" sx={{ p: 2.5, height: "100%", boxShadow: "0 1px 2px rgba(15, 23, 42, 0.05)" }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>
+    <Paper variant="outlined" sx={{ p: 2.25, height: "100%", boxShadow: "none", borderColor: "#eaedf3" }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ mb: 2.2 }}>
         <Typography variant="h6">{title}</Typography>
         {action}
       </Stack>
@@ -227,26 +226,29 @@ function MetricCard({
   progress: number;
 }) {
   return (
-    <Paper variant="outlined" sx={{ p: 2.4, overflow: "hidden", position: "relative", boxShadow: "0 1px 2px rgba(15, 23, 42, 0.05)" }}>
+    <Paper variant="outlined" sx={{ p: 2.25, minHeight: 154, overflow: "hidden", position: "relative", boxShadow: "none", borderColor: "#eaedf3" }}>
       <Stack direction="row" spacing={1.5} alignItems="flex-start">
         <Box
           sx={{
-            width: 42,
-            height: 42,
-            borderRadius: 2,
+            position: "absolute",
+            top: 18,
+            right: 18,
+            width: 34,
+            height: 34,
+            borderRadius: 2.2,
             display: "grid",
             placeItems: "center",
             color,
-            bgcolor: alpha(color, 0.10)
+            bgcolor: alpha(color, 0.08)
           }}
         >
           {icon}
         </Box>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography color="text.secondary" variant="body2">
+        <Box sx={{ flex: 1, minWidth: 0, pr: 5 }}>
+          <Typography color="text.secondary" variant="body2" sx={{ fontWeight: 600 }}>
             {label}
           </Typography>
-          <Typography variant="h4" sx={{ mt: 0.3 }}>
+          <Typography variant="h4" sx={{ mt: 1, mb: 0.5 }}>
             {formatNumber(value)}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -254,7 +256,7 @@ function MetricCard({
           </Typography>
         </Box>
       </Stack>
-      <Box sx={{ mt: 2, height: 7, borderRadius: 999, bgcolor: "#eef2f7", overflow: "hidden" }}>
+      <Box sx={{ mt: 2.4, height: 6, borderRadius: 999, bgcolor: "#eef1f6", overflow: "hidden" }}>
         <Box sx={{ width: `${Math.min(Math.max(progress, 0), 100)}%`, height: "100%", bgcolor: color, borderRadius: 999 }} />
       </Box>
     </Paper>
@@ -283,7 +285,8 @@ function StatusRing({ label, value, total, color, helper }: { label: string; val
             display: "grid",
             placeItems: "center",
             bgcolor: "#ffffff",
-            fontWeight: 900
+            fontSize: 12,
+            fontWeight: 700
           }}
         >
           {percent}%
@@ -304,19 +307,19 @@ function StatusRing({ label, value, total, color, helper }: { label: string; val
 
 function EmptyState({ title, body, to, action }: { title: string; body: string; to: string; action: string }) {
   return (
-    <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ minHeight: 230, textAlign: "center", color: "text.secondary" }}>
-      <Box sx={{ width: 54, height: 54, borderRadius: 2, display: "grid", placeItems: "center", bgcolor: "#f1f5f9", color: "primary.main" }}>
+    <Stack alignItems="center" justifyContent="center" spacing={1.3} sx={{ minHeight: 188, textAlign: "center", color: "text.secondary" }}>
+      <Box sx={{ width: 46, height: 46, borderRadius: 2.2, display: "grid", placeItems: "center", bgcolor: "#f6f7fb", color: "#9aa0aa" }}>
         <TaskAltIcon />
       </Box>
       <Box>
         <Typography variant="subtitle1" color="text.primary">
           {title}
         </Typography>
-        <Typography variant="body2" sx={{ maxWidth: 340 }}>
+        <Typography variant="body2" sx={{ maxWidth: 320 }}>
           {body}
         </Typography>
       </Box>
-      <Button component={RouterLink} to={to} variant="outlined" size="small">
+      <Button component={RouterLink} to={to} variant="outlined" size="small" sx={{ color: "text.primary" }}>
         {action}
       </Button>
     </Stack>
@@ -335,17 +338,17 @@ export function DashboardPage() {
   const credentialTotal = data?.employees ?? 0;
 
   return (
-    <Stack spacing={2.5}>
+    <Stack spacing={2.2}>
       <Stack direction={{ xs: "column", lg: "row" }} spacing={1.5} alignItems={{ lg: "center" }} justifyContent="space-between">
         <Box>
-          <Typography variant="h4">Dashboard operativo</Typography>
+          <Typography variant="h4">Dashboard</Typography>
           <Typography color="text.secondary">
-            Vista rapida de personas, biometria, dispositivos, comandos y eventos reales del sistema.
+            Asistencia, dispositivos y comandos en una vista limpia.
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Chip label={`Hoy ${new Intl.DateTimeFormat("es-GT", { dateStyle: "medium" }).format(new Date())}`} variant="outlined" />
-          <Chip label="Sin datos demo" color="primary" variant="outlined" />
+          <Chip label="Sin datos demo" variant="outlined" />
           <IconButton onClick={() => query.refetch()} aria-label="refrescar dashboard">
             <RefreshIcon />
           </IconButton>
@@ -365,7 +368,7 @@ export function DashboardPage() {
               label="Empleados"
               value={data?.employees}
               helper={`${formatNumber(data?.activeEmployees)} activos`}
-              color="#0f766e"
+              color="#4f46e5"
               progress={credentialTotal ? ((data?.activeEmployees ?? 0) / credentialTotal) * 100 : 0}
             />
           )}
@@ -393,7 +396,7 @@ export function DashboardPage() {
               label="Eventos hoy"
               value={data?.todayEvents}
               helper="Marcajes recibidos"
-              color="#f59e0b"
+              color="#4f46e5"
               progress={Math.min((data?.todayEvents ?? 0) * 8, 100)}
             />
           )}
@@ -407,7 +410,7 @@ export function DashboardPage() {
               label="Comandos pendientes"
               value={data?.pendingCommands}
               helper="Cola por procesar"
-              color="#dc2626"
+              color="#4f46e5"
               progress={Math.min((data?.pendingCommands ?? 0) * 20, 100)}
             />
           )}
@@ -427,16 +430,16 @@ export function DashboardPage() {
             ) : (
               <Grid2 container spacing={2.5}>
                 <Grid2 size={{ xs: 12, sm: 6 }}>
-                  <StatusRing label="Personas activas" value={data?.activeEmployees ?? 0} total={credentialTotal} color="#0f766e" helper="Listas para asistencia" />
+                  <StatusRing label="Personas activas" value={data?.activeEmployees ?? 0} total={credentialTotal} color="#4f46e5" helper="Listas para asistencia" />
                 </Grid2>
                 <Grid2 size={{ xs: 12, sm: 6 }}>
-                  <StatusRing label="Tarjetas" value={data?.cards ?? 0} total={credentialTotal} color="#f59e0b" helper="Con numero asignado" />
+                  <StatusRing label="Tarjetas" value={data?.cards ?? 0} total={credentialTotal} color="#8b5cf6" helper="Con numero asignado" />
                 </Grid2>
                 <Grid2 size={{ xs: 12, sm: 6 }}>
-                  <StatusRing label="Huellas" value={data?.fingerprints ?? 0} total={credentialTotal} color="#4f46e5" helper="Minimo una huella" />
+                  <StatusRing label="Huellas" value={data?.fingerprints ?? 0} total={credentialTotal} color="#6366f1" helper="Minimo una huella" />
                 </Grid2>
                 <Grid2 size={{ xs: 12, sm: 6 }}>
-                  <StatusRing label="Rostros" value={data?.faces ?? 0} total={credentialTotal} color="#14b8a6" helper="Enrolamiento facial" />
+                  <StatusRing label="Rostros" value={data?.faces ?? 0} total={credentialTotal} color="#a78bfa" helper="Enrolamiento facial" />
                 </Grid2>
               </Grid2>
             )}
@@ -455,7 +458,7 @@ export function DashboardPage() {
             ) : (
               <Stack spacing={1.5}>
                 {[
-                  { label: "Online", value: data?.onlineDevices ?? 0, color: "#16a34a" },
+                { label: "Online", value: data?.onlineDevices ?? 0, color: "#4f46e5" },
                   { label: "Offline", value: data?.offlineDevices ?? 0, color: "#64748b" },
                   { label: "Error", value: data?.errorDevices ?? 0, color: "#dc2626" }
                 ].map((item) => {
@@ -538,10 +541,10 @@ export function DashboardPage() {
           >
             <Grid2 container spacing={1.25}>
               {[
-                { label: "Crear empleados", to: "/employees", icon: <BadgeIcon />, color: "#0f766e" },
+                { label: "Crear empleados", to: "/employees", icon: <BadgeIcon />, color: "#4f46e5" },
                 { label: "Registrar dispositivo", to: "/devices", icon: <SettingsInputAntennaIcon />, color: "#4f46e5" },
-                { label: "Enviar comando", to: "/commands", icon: <TuneIcon />, color: "#f59e0b" },
-                { label: "Ver eventos", to: "/live-events", icon: <PersonSearchIcon />, color: "#14b8a6" }
+                { label: "Enviar comando", to: "/commands", icon: <TuneIcon />, color: "#4f46e5" },
+                { label: "Ver eventos", to: "/live-events", icon: <PersonSearchIcon />, color: "#4f46e5" }
               ].map((item) => (
                 <Grid2 key={item.to} size={{ xs: 12, sm: 6 }}>
                   <Button
@@ -557,9 +560,9 @@ export function DashboardPage() {
                 </Grid2>
               ))}
             </Grid2>
-            <Alert severity="info" sx={{ mt: 2 }}>
-              El puerto ISUP 7660 queda listo; el listener real depende del SDK oficial HCISUP/ISUP.
-            </Alert>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.8 }}>
+              ISUP real queda pendiente hasta instalar el SDK oficial HCISUP/ISUP.
+            </Typography>
           </Panel>
         </Grid2>
       </Grid2>
@@ -631,19 +634,6 @@ export function DashboardPage() {
         </Grid2>
       </Grid2>
 
-      <Paper variant="outlined" sx={{ p: 2, bgcolor: "#ffffff" }}>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ md: "center" }} justifyContent="space-between">
-          <Stack direction="row" spacing={1} alignItems="center">
-            <FactCheckIcon color="primary" />
-            <Typography variant="body2" color="text.secondary">
-              Produccion inicia sin datos demo. Configura compania, sucursales, horarios, empleados y dispositivos desde la UI.
-            </Typography>
-          </Stack>
-          <Button component={RouterLink} to="/companies" variant="contained" size="small">
-            Empezar configuracion
-          </Button>
-        </Stack>
-      </Paper>
     </Stack>
   );
 }

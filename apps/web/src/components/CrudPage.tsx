@@ -142,7 +142,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
     <Stack spacing={2}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }} justifyContent="space-between">
         <Box>
-          <Typography variant="h5">{title}</Typography>
+          <Typography variant="h4">{title}</Typography>
           <Typography variant="body2" color="text.secondary">
             Gestiona registros desde Supabase con RLS activo.
           </Typography>
@@ -174,7 +174,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
       {query.error && <Alert severity="error">{query.error.message}</Alert>}
       {!query.isLoading && rows.length === 0 && <Alert severity="info">No hay registros para mostrar.</Alert>}
 
-      <TableContainer component={Paper}>
+      <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
         <Table size="small">
           <TableHead>
             <TableRow>

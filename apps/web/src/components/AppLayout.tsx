@@ -13,7 +13,6 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  ListSubheader,
   Stack,
   TextField,
   Toolbar,
@@ -35,45 +34,36 @@ import TuneIcon from "@mui/icons-material/Tune";
 import MenuIcon from "@mui/icons-material/Menu";
 import SearchIcon from "@mui/icons-material/Search";
 import LogoutIcon from "@mui/icons-material/Logout";
-import CloudDoneIcon from "@mui/icons-material/CloudDone";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import { supabase } from "../lib/supabase";
 
-const drawerWidth = 272;
+const desktopDrawerWidth = 96;
+const mobileDrawerWidth = 264;
 
 const navSections = [
-  {
-    label: "Operacion",
-    items: [
-      { label: "Dashboard", to: "/", icon: <DashboardIcon /> },
-      { label: "Empresas", to: "/companies", icon: <ApartmentIcon /> },
-      { label: "Sucursales", to: "/branches", icon: <ApartmentIcon /> },
-      { label: "Departamentos", to: "/departments", icon: <GroupsIcon /> },
-      { label: "Grupos asistencia", to: "/attendance-groups", icon: <FactCheckIcon /> },
-      { label: "Horarios", to: "/work-schedules", icon: <EventIcon /> }
-    ]
-  },
-  {
-    label: "Acceso",
-    items: [
-      { label: "Empleados", to: "/employees", icon: <BadgeIcon /> },
-      { label: "Dispositivos", to: "/devices", icon: <DevicesIcon /> },
-      { label: "Asignaciones", to: "/employee-devices", icon: <GroupsIcon /> },
-      { label: "Comandos", to: "/commands", icon: <TuneIcon /> },
-      { label: "Eventos en vivo", to: "/live-events", icon: <HistoryIcon /> }
-    ]
-  },
-  {
-    label: "Reportes",
-    items: [
-      { label: "Reporte diario", to: "/daily-report", icon: <FactCheckIcon /> },
-      { label: "Reporte rango", to: "/range-report", icon: <FactCheckIcon /> },
-      { label: "Ajustes manuales", to: "/manual-adjustments", icon: <TuneIcon /> },
-      { label: "Auditoria", to: "/audit", icon: <HistoryIcon /> },
-      { label: "Configuracion", to: "/settings", icon: <SettingsIcon /> }
-    ]
-  }
+  [
+    { label: "Dashboard", to: "/", icon: <DashboardIcon /> },
+    { label: "Empresas", to: "/companies", icon: <ApartmentIcon /> },
+    { label: "Sucursales", to: "/branches", icon: <ApartmentIcon /> },
+    { label: "Departamentos", to: "/departments", icon: <GroupsIcon /> },
+    { label: "Grupos asistencia", to: "/attendance-groups", icon: <FactCheckIcon /> },
+    { label: "Horarios", to: "/work-schedules", icon: <EventIcon /> }
+  ],
+  [
+    { label: "Empleados", to: "/employees", icon: <BadgeIcon /> },
+    { label: "Dispositivos", to: "/devices", icon: <DevicesIcon /> },
+    { label: "Asignaciones", to: "/employee-devices", icon: <GroupsIcon /> },
+    { label: "Comandos", to: "/commands", icon: <TuneIcon /> },
+    { label: "Eventos en vivo", to: "/live-events", icon: <HistoryIcon /> }
+  ],
+  [
+    { label: "Reporte diario", to: "/daily-report", icon: <FactCheckIcon /> },
+    { label: "Reporte rango", to: "/range-report", icon: <FactCheckIcon /> },
+    { label: "Ajustes manuales", to: "/manual-adjustments", icon: <TuneIcon /> },
+    { label: "Auditoria", to: "/audit", icon: <HistoryIcon /> },
+    { label: "Configuracion", to: "/settings", icon: <SettingsIcon /> }
+  ]
 ];
 
 export function AppLayout({ children }: PropsWithChildren) {
@@ -83,6 +73,7 @@ export function AppLayout({ children }: PropsWithChildren) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
   const { session } = useSession();
+  const drawerWidth = isDesktop ? desktopDrawerWidth : mobileDrawerWidth;
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -96,120 +87,106 @@ export function AppLayout({ children }: PropsWithChildren) {
     navigate(`/employees?search=${encodeURIComponent(text)}`);
   }
 
+  const logo = (
+    <Stack alignItems="center" spacing={0.6}>
+      <Typography sx={{ fontSize: 27, fontWeight: 800, lineHeight: 0.9, letterSpacing: -1.5, color: "#111217" }}>
+        ac
+      </Typography>
+      <Box sx={{ width: 22, height: 3, borderRadius: 999, bgcolor: "primary.main" }} />
+    </Stack>
+  );
+
   const drawer = (
     <Box sx={{ display: "flex", minHeight: "100%", flexDirection: "column", bgcolor: "#ffffff" }}>
-      <Stack spacing={1.5} sx={{ p: 2.25, pb: 2 }}>
-        <Stack direction="row" alignItems="center" spacing={1.25}>
-          <Box
-            sx={{
-              width: 38,
-              height: 38,
-              borderRadius: 2,
-              display: "grid",
-              placeItems: "center",
-              color: "white",
-              fontWeight: 900,
-              background: "linear-gradient(135deg, #0f766e 0%, #4f46e5 100%)",
-              boxShadow: "0 12px 22px rgba(15, 118, 110, 0.20)"
-            }}
-          >
-            AC
-          </Box>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="subtitle1" sx={{ lineHeight: 1.15 }}>
-              Renovagt
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Control de asistencia
-            </Typography>
-          </Box>
-        </Stack>
-        <Chip
-          size="small"
-          icon={<CloudDoneIcon />}
-          label="Ambiente produccion"
-          sx={{
-            alignSelf: "flex-start",
-            bgcolor: alpha(theme.palette.primary.main, 0.09),
-            color: "primary.dark",
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.20)}`
-          }}
-        />
+      <Stack alignItems={isDesktop ? "center" : "flex-start"} spacing={1.5} sx={{ px: 2, py: 2.5 }}>
+        {isDesktop ? (
+          logo
+        ) : (
+          <Stack direction="row" alignItems="center" spacing={1.5}>
+            {logo}
+            <Box>
+              <Typography variant="subtitle1">Renovagt</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Control de asistencia
+              </Typography>
+            </Box>
+          </Stack>
+        )}
       </Stack>
       <Divider />
-      <Box sx={{ flex: 1, overflowY: "auto", py: 1 }}>
-        {navSections.map((section) => (
-          <List
-            key={section.label}
-            dense
-            subheader={
-              <ListSubheader
-                sx={{
-                  bgcolor: "transparent",
-                  color: "text.secondary",
-                  fontSize: 11,
-                  fontWeight: 900,
-                  letterSpacing: 0.7,
-                  lineHeight: "32px",
-                  textTransform: "uppercase"
-                }}
-              >
-                {section.label}
-              </ListSubheader>
-            }
-          >
-            {section.items.map((item) => (
-              <ListItemButton
-                key={item.to}
-                component={NavLink}
-                to={item.to}
-                end={item.to === "/"}
-                onClick={() => setMobileOpen(false)}
-                sx={{
-                  mx: 1.25,
-                  my: 0.2,
-                  minHeight: 42,
-                  color: "text.secondary",
-                  "& .MuiListItemIcon-root": {
-                    minWidth: 38,
-                    color: "inherit"
-                  },
-                  "& .MuiListItemText-primary": {
-                    fontSize: 14,
-                    fontWeight: 700
-                  },
-                  "&:hover": {
-                    bgcolor: alpha(theme.palette.primary.main, 0.07),
-                    color: "primary.dark"
-                  },
-                  "&.active": {
-                    bgcolor: "primary.main",
-                    color: "primary.contrastText",
-                    boxShadow: "0 10px 18px rgba(15, 118, 110, 0.18)",
-                    "& .MuiListItemIcon-root": { color: "inherit" }
-                  }
-                }}
-              >
-                <ListItemIcon>{item.icon}</ListItemIcon>
-                <ListItemText primary={item.label} />
-              </ListItemButton>
-            ))}
+      <Stack component="nav" spacing={2} sx={{ flex: 1, overflowY: "auto", px: isDesktop ? 1.25 : 1.5, py: 2 }}>
+        {navSections.map((section, sectionIndex) => (
+          <List key={sectionIndex} dense disablePadding sx={{ display: "grid", gap: 0.5 }}>
+            {section.map((item) => {
+              const button = (
+                <ListItemButton
+                  component={NavLink}
+                  to={item.to}
+                  end={item.to === "/"}
+                  onClick={() => setMobileOpen(false)}
+                  sx={{
+                    minHeight: isDesktop ? 46 : 42,
+                    justifyContent: isDesktop ? "center" : "flex-start",
+                    px: isDesktop ? 0 : 1.4,
+                    color: "#9aa0aa",
+                    "& .MuiListItemIcon-root": {
+                      minWidth: isDesktop ? 0 : 38,
+                      color: "inherit"
+                    },
+                    "& .MuiListItemText-primary": {
+                      fontSize: 13,
+                      fontWeight: 600
+                    },
+                    "&:hover": {
+                      bgcolor: "#f5f6fb",
+                      color: "text.primary"
+                    },
+                    "&.active": {
+                      bgcolor: alpha(theme.palette.primary.main, 0.08),
+                      color: "primary.main",
+                      "& .MuiListItemIcon-root": { color: "inherit" }
+                    }
+                  }}
+                >
+                  <ListItemIcon>{item.icon}</ListItemIcon>
+                  {!isDesktop && <ListItemText primary={item.label} />}
+                </ListItemButton>
+              );
+
+              return isDesktop ? (
+                <Tooltip key={item.to} title={item.label} placement="right">
+                  {button}
+                </Tooltip>
+              ) : (
+                <Box key={item.to}>{button}</Box>
+              );
+            })}
           </List>
         ))}
-      </Box>
+      </Stack>
       <Divider />
-      <Stack direction="row" spacing={1.25} alignItems="center" sx={{ p: 2 }}>
-        <Avatar sx={{ width: 34, height: 34, bgcolor: "secondary.main", fontSize: 14 }}>
-          {(session?.user.email ?? "U").slice(0, 1).toUpperCase()}
-        </Avatar>
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>
-            Administrador
-          </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap>
-            {session?.user.email ?? "Sesion activa"}
-          </Typography>
-        </Box>
+      <Stack alignItems={isDesktop ? "center" : "flex-start"} sx={{ p: 2 }}>
+        {isDesktop ? (
+          <Tooltip title={session?.user.email ?? "Sesion activa"} placement="right">
+            <Avatar sx={{ width: 36, height: 36, bgcolor: "primary.main", fontSize: 13, fontWeight: 700 }}>
+              {(session?.user.email ?? "U").slice(0, 1).toUpperCase()}
+            </Avatar>
+          </Tooltip>
+        ) : (
+          <Stack direction="row" spacing={1.25} alignItems="center">
+            <Avatar sx={{ width: 34, height: 34, bgcolor: "primary.main", fontSize: 13, fontWeight: 700 }}>
+              {(session?.user.email ?? "U").slice(0, 1).toUpperCase()}
+            </Avatar>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
+                Administrador
+              </Typography>
+              <Typography variant="caption" color="text.secondary" noWrap>
+                {session?.user.email ?? "Sesion activa"}
+              </Typography>
+            </Box>
+          </Stack>
+        )}
       </Stack>
     </Box>
   );
@@ -223,18 +200,18 @@ export function AppLayout({ children }: PropsWithChildren) {
         sx={{
           borderBottom: 1,
           borderColor: "divider",
-          ml: { md: `${drawerWidth}px` },
-          width: { md: `calc(100% - ${drawerWidth}px)` },
+          ml: { md: `${desktopDrawerWidth}px` },
+          width: { md: `calc(100% - ${desktopDrawerWidth}px)` },
           zIndex: theme.zIndex.drawer + 1
         }}
       >
-        <Toolbar sx={{ gap: 1.5, minHeight: { xs: 64, sm: 72 } }}>
+        <Toolbar sx={{ gap: 1.5, minHeight: { xs: 64, sm: 76 }, px: { xs: 2, md: 3 } }}>
           {!isDesktop && (
             <IconButton onClick={() => setMobileOpen(true)} aria-label="abrir menu">
               <MenuIcon />
             </IconButton>
           )}
-          <Box component="form" onSubmit={submitSearch} sx={{ display: { xs: "none", sm: "block" }, maxWidth: 430, flex: 1 }}>
+          <Box component="form" onSubmit={submitSearch} sx={{ display: { xs: "none", sm: "block" }, maxWidth: 540, flex: 1 }}>
             <TextField
               size="small"
               placeholder="Buscar empleado"
@@ -252,16 +229,19 @@ export function AppLayout({ children }: PropsWithChildren) {
           </Box>
           <Box sx={{ flex: 1, display: { xs: "block", sm: "none" } }} />
           <Stack direction="row" spacing={1} alignItems="center">
-            <Chip size="small" label="Produccion" color="success" variant="outlined" sx={{ display: { xs: "none", md: "inline-flex" } }} />
-            <Tooltip title="Cerrar sesion">
-              <Button color="inherit" startIcon={<LogoutIcon />} onClick={signOut}>
-                Salir
-              </Button>
-            </Tooltip>
+            <Chip
+              size="small"
+              label="Produccion"
+              variant="outlined"
+              sx={{ display: { xs: "none", md: "inline-flex" }, color: "text.secondary", borderColor: "divider" }}
+            />
+            <Button color="inherit" startIcon={<LogoutIcon fontSize="small" />} onClick={signOut} sx={{ color: "text.primary" }}>
+              Salir
+            </Button>
           </Stack>
         </Toolbar>
       </AppBar>
-      <Box component="nav" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }} aria-label="navegacion principal">
+      <Box component="nav" sx={{ width: { md: desktopDrawerWidth }, flexShrink: { md: 0 } }} aria-label="navegacion principal">
         <Drawer
           variant={isDesktop ? "permanent" : "temporary"}
           open={isDesktop || mobileOpen}
@@ -279,8 +259,8 @@ export function AppLayout({ children }: PropsWithChildren) {
           {drawer}
         </Drawer>
       </Box>
-      <Box component="main" sx={{ flexGrow: 1, minWidth: 0, p: { xs: 2, lg: 3 } }}>
-        <Toolbar sx={{ minHeight: { xs: 64, sm: 72 } }} />
+      <Box component="main" sx={{ flexGrow: 1, minWidth: 0, px: { xs: 2, lg: 3 }, py: { xs: 2, lg: 2.5 } }}>
+        <Toolbar sx={{ minHeight: { xs: 64, sm: 76 } }} />
         {children}
       </Box>
     </Box>
