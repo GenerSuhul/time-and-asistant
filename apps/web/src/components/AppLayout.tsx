@@ -34,8 +34,6 @@ import TuneIcon from "@mui/icons-material/Tune";
 import MenuIcon from "@mui/icons-material/Menu";
 import SearchIcon from "@mui/icons-material/Search";
 import LogoutIcon from "@mui/icons-material/Logout";
-import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
 import { NavLink, useNavigate } from "react-router-dom";
 import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
@@ -99,6 +97,11 @@ export function AppLayout({ children }: PropsWithChildren) {
     navigate(`/employees?search=${encodeURIComponent(text)}`);
   }
 
+  function openSidebarFromItem() {
+    if (isDesktop && !desktopExpanded) setDesktopExpanded(true);
+    setMobileOpen(false);
+  }
+
   const logo = (
     <Stack alignItems="center" spacing={0.6}>
       <Typography sx={{ fontSize: 27, fontWeight: 800, lineHeight: 0.9, letterSpacing: 0, color: "#111217" }}>
@@ -109,11 +112,16 @@ export function AppLayout({ children }: PropsWithChildren) {
   );
 
   const drawer = (
-    <Box sx={{ display: "flex", minHeight: "100%", flexDirection: "column", bgcolor: "#ffffff" }}>
+    <Box
+      onMouseLeave={() => {
+        if (isDesktop) setDesktopExpanded(false);
+      }}
+      sx={{ display: "flex", minHeight: "100%", flexDirection: "column", bgcolor: "#ffffff" }}
+    >
       <Stack
         direction={isExpanded ? "row" : "column"}
         alignItems="center"
-        justifyContent={isExpanded ? "space-between" : "center"}
+        justifyContent={isExpanded ? "flex-start" : "center"}
         spacing={1.2}
         sx={{ px: 2, py: 2.5 }}
       >
@@ -128,13 +136,6 @@ export function AppLayout({ children }: PropsWithChildren) {
             </Box>
           )}
         </Stack>
-        {isDesktop && (
-          <Tooltip title={desktopExpanded ? "Contraer menu" : "Expandir menu"} placement="right">
-            <IconButton size="small" onClick={() => setDesktopExpanded((current) => !current)} aria-label="alternar menu">
-              {desktopExpanded ? <ChevronLeftIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-        )}
       </Stack>
       <Divider />
       <Stack component="nav" spacing={2} sx={{ flex: 1, overflowY: "auto", px: isDesktop ? 1.25 : 1.5, py: 2 }}>
@@ -146,7 +147,7 @@ export function AppLayout({ children }: PropsWithChildren) {
                   component={NavLink}
                   to={item.to}
                   end={item.to === "/"}
-                  onClick={() => setMobileOpen(false)}
+                  onClick={openSidebarFromItem}
                   sx={{
                     minHeight: isDesktop ? 46 : 42,
                     justifyContent: isExpanded ? "flex-start" : "center",
@@ -192,7 +193,10 @@ export function AppLayout({ children }: PropsWithChildren) {
         {!isExpanded ? (
           <Tooltip title={`${currentName} - ${currentEmail}`} placement="right">
             <Avatar
-              onClick={() => navigate("/settings")}
+              onClick={() => {
+                if (isDesktop && !desktopExpanded) setDesktopExpanded(true);
+                navigate("/settings");
+              }}
               sx={{ width: 36, height: 36, bgcolor: "primary.main", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
             >
               {currentName.slice(0, 1).toUpperCase()}
@@ -234,6 +238,9 @@ export function AppLayout({ children }: PropsWithChildren) {
           borderColor: "divider",
           ml: { md: `${activeDesktopWidth}px` },
           width: { md: `calc(100% - ${activeDesktopWidth}px)` },
+          transition: theme.transitions.create(["margin-left", "width"], {
+            duration: theme.transitions.duration.shorter
+          }),
           zIndex: theme.zIndex.drawer + 1
         }}
       >
@@ -273,7 +280,15 @@ export function AppLayout({ children }: PropsWithChildren) {
           </Stack>
         </Toolbar>
       </AppBar>
-      <Box component="nav" sx={{ width: { md: activeDesktopWidth }, flexShrink: { md: 0 } }} aria-label="navegacion principal">
+      <Box
+        component="nav"
+        sx={{
+          width: { md: activeDesktopWidth },
+          flexShrink: { md: 0 },
+          transition: theme.transitions.create("width", { duration: theme.transitions.duration.shorter })
+        }}
+        aria-label="navegacion principal"
+      >
         <Drawer
           variant={isDesktop ? "permanent" : "temporary"}
           open={isDesktop || mobileOpen}
@@ -284,7 +299,8 @@ export function AppLayout({ children }: PropsWithChildren) {
               width: drawerWidth,
               boxSizing: "border-box",
               borderRight: "1px solid",
-              borderColor: "divider"
+              borderColor: "divider",
+              transition: theme.transitions.create("width", { duration: theme.transitions.duration.shorter })
             }
           }}
         >
