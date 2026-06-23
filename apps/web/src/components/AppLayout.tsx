@@ -34,6 +34,8 @@ import TuneIcon from "@mui/icons-material/Tune";
 import MenuIcon from "@mui/icons-material/Menu";
 import SearchIcon from "@mui/icons-material/Search";
 import LogoutIcon from "@mui/icons-material/Logout";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
 import { NavLink, useNavigate } from "react-router-dom";
 import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
@@ -43,6 +45,7 @@ import { supabase } from "../lib/supabase";
 const desktopDrawerWidth = 96;
 const desktopExpandedDrawerWidth = 264;
 const mobileDrawerWidth = 264;
+const sidebarPreferenceKey = "attendance.sidebar.expanded";
 
 const navSections = [
   [
@@ -75,15 +78,20 @@ export function AppLayout({ children }: PropsWithChildren) {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [desktopExpanded, setDesktopExpanded] = useState(false);
+  const [desktopPinnedExpanded, setDesktopPinnedExpanded] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem(sidebarPreferenceKey) !== "false";
+  });
+  const [desktopPreviewExpanded, setDesktopPreviewExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const { session } = useSession();
   const currentUser = useCurrentUserProfile();
   const currentName = displayName(currentUser.data);
   const currentEmail = currentUser.data?.profile?.email ?? session?.user.email ?? "Sesion activa";
+  const desktopExpanded = desktopPinnedExpanded || desktopPreviewExpanded;
   const isExpanded = !isDesktop || desktopExpanded;
-  const activeDesktopWidth = desktopExpanded ? desktopExpandedDrawerWidth : desktopDrawerWidth;
-  const drawerWidth = isDesktop ? activeDesktopWidth : mobileDrawerWidth;
+  const activeDesktopWidth = desktopPinnedExpanded ? desktopExpandedDrawerWidth : desktopDrawerWidth;
+  const drawerWidth = isDesktop ? (desktopExpanded ? desktopExpandedDrawerWidth : desktopDrawerWidth) : mobileDrawerWidth;
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -98,8 +106,16 @@ export function AppLayout({ children }: PropsWithChildren) {
   }
 
   function openSidebarFromItem() {
-    if (isDesktop && !desktopExpanded) setDesktopExpanded(true);
     setMobileOpen(false);
+  }
+
+  function togglePinnedSidebar() {
+    setDesktopPinnedExpanded((current) => {
+      const next = !current;
+      window.localStorage.setItem(sidebarPreferenceKey, String(next));
+      if (next) setDesktopPreviewExpanded(false);
+      return next;
+    });
   }
 
   const logo = (
@@ -113,8 +129,19 @@ export function AppLayout({ children }: PropsWithChildren) {
 
   const drawer = (
     <Box
+      onMouseEnter={() => {
+        if (isDesktop && !desktopPinnedExpanded) setDesktopPreviewExpanded(true);
+      }}
       onMouseLeave={() => {
-        if (isDesktop) setDesktopExpanded(false);
+        if (isDesktop && !desktopPinnedExpanded) setDesktopPreviewExpanded(false);
+      }}
+      onFocusCapture={() => {
+        if (isDesktop && !desktopPinnedExpanded) setDesktopPreviewExpanded(true);
+      }}
+      onBlurCapture={(event) => {
+        if (!isDesktop || desktopPinnedExpanded) return;
+        const nextFocusedElement = event.relatedTarget as Node | null;
+        if (!event.currentTarget.contains(nextFocusedElement)) setDesktopPreviewExpanded(false);
       }}
       sx={{ display: "flex", minHeight: "100%", flexDirection: "column", bgcolor: "#ffffff" }}
     >
@@ -136,6 +163,13 @@ export function AppLayout({ children }: PropsWithChildren) {
             </Box>
           )}
         </Stack>
+        {isDesktop && isExpanded && (
+          <Tooltip title={desktopPinnedExpanded ? "Contraer menu" : "Mantener abierto"} placement="right">
+            <IconButton size="small" onClick={togglePinnedSidebar} aria-label={desktopPinnedExpanded ? "contraer menu" : "mantener menu abierto"}>
+              {desktopPinnedExpanded ? <ChevronLeftIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        )}
       </Stack>
       <Divider />
       <Stack component="nav" spacing={2} sx={{ flex: 1, overflowY: "auto", px: isDesktop ? 1.25 : 1.5, py: 2 }}>
@@ -194,7 +228,6 @@ export function AppLayout({ children }: PropsWithChildren) {
           <Tooltip title={`${currentName} - ${currentEmail}`} placement="right">
             <Avatar
               onClick={() => {
-                if (isDesktop && !desktopExpanded) setDesktopExpanded(true);
                 navigate("/settings");
               }}
               sx={{ width: 36, height: 36, bgcolor: "primary.main", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
@@ -300,6 +333,8 @@ export function AppLayout({ children }: PropsWithChildren) {
               boxSizing: "border-box",
               borderRight: "1px solid",
               borderColor: "divider",
+              zIndex: isDesktop && desktopPreviewExpanded && !desktopPinnedExpanded ? theme.zIndex.drawer + 2 : theme.zIndex.drawer,
+              boxShadow: isDesktop && desktopPreviewExpanded && !desktopPinnedExpanded ? "24px 0 48px rgba(16, 24, 40, 0.12)" : "none",
               transition: theme.transitions.create("width", { duration: theme.transitions.duration.shorter })
             }
           }}
