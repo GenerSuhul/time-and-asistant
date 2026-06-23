@@ -1,0 +1,28 @@
+{
+  "name": "hik-attendance-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:gateway\"",
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:gateway": "npm --workspace packages/shared run build && npm --workspace services/device-gateway run dev",
+    "build": "npm --workspaces --if-present run build",
+    "lint": "npm --workspaces --if-present run lint",
+    "typecheck": "npm --workspaces --if-present run typecheck",
+    "gateway:start": "npm --workspace services/device-gateway run start",
+    "gateway:pm2": "npm --workspace services/device-gateway run pm2",
+    "supabase:push": "supabase db push",
+    "supabase:functions:deploy": "node scripts/ops/deploy-functions.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.2"
+  }
+}
