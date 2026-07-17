@@ -1,10 +1,5 @@
 import { CrudPage, type CrudColumn, type CrudField } from "../components/CrudPage";
-import { useState } from "react";
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, TextField } from "@mui/material";
-import FingerprintIcon from "@mui/icons-material/Fingerprint";
-import SyncIcon from "@mui/icons-material/Sync";
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "../lib/supabase";
+import { EmployeeManagementPage } from "./EmployeeManagementPage";
 
 const companyFields: CrudField[] = [
   { name: "name", label: "Nombre", required: true },
@@ -120,30 +115,7 @@ export function WorkSchedulesPage() {
 }
 
 export function EmployeesPage() {
-  const [message, setMessage] = useState("");
-  const [importOpen, setImportOpen] = useState(false);
-  const [enrollment, setEnrollment] = useState<{ employeeId: string; name: string } | null>(null);
-  const [deviceId, setDeviceId] = useState("");
-  const [fingerNo, setFingerNo] = useState(1);
-  const devices = useQuery({ queryKey: ["employee-workflow-devices"], queryFn: async () => {
-    const { data, error } = await supabase.from("devices").select("id,name,status,dev_index").not("dev_index", "is", null).order("name");
-    if (error) throw error; return data ?? [];
-  }});
-  async function invoke(body: Record<string, unknown>, success: string) {
-    setMessage("");
-    const { error } = await supabase.functions.invoke("admin-employees", { body });
-    setMessage(error ? error.message : success);
-    return !error;
-  }
-  return <>
-    <CrudPage title="Empleados" table="employees" select="*, companies:company_id(name), branches:branch_id(name), departments:department_id(name), attendance_groups:attendance_group_id(name)" fields={employeeFields} mutationFunction="admin-employees" mutationPayloadKey="employee" realtimeTables={["employees", "employee_devices", "biometric_enrollment_sessions"]} headerActions={<Stack direction="row" spacing={1}>
-      <Button startIcon={<SyncIcon />} onClick={() => setImportOpen(true)}>Sincronizar dispositivo</Button>
-      <Button startIcon={<SyncIcon />} onClick={() => void invoke({ action: "sync_all_device_people" }, "Sincronización de todos los dispositivos en cola.")}>Sincronizar todos</Button>
-    </Stack>} renderRowActions={(row) => <Button size="small" startIcon={<FingerprintIcon />} onClick={() => { setEnrollment({ employeeId: row.id, name: String(row.full_name ?? "Empleado") }); setDeviceId(""); }}>Capturar huella</Button>} columns={baseColumns([{ name: "employee_code", label: "Codigo" }, { name: "full_name", label: "Nombre" }, { name: "branches.name", label: "Sucursal" }, { name: "departments.name", label: "Departamento" }, { name: "status", label: "Estado", status: true }, { name: "fingerprint_status", label: "Huella", status: true }, { name: "face_status", label: "Rostro", status: true }])} />
-    {message && <Alert sx={{ mt: 2 }} severity={/cola|iniciada/i.test(message) ? "success" : "error"}>{message}</Alert>}
-    <Dialog open={importOpen} onClose={() => setImportOpen(false)} fullWidth maxWidth="sm"><DialogTitle>Sincronizar empleados desde dispositivo</DialogTitle><DialogContent><TextField sx={{ mt: 1 }} select fullWidth label="Dispositivo" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>{(devices.data ?? []).map((d) => <MenuItem key={d.id} value={d.id}>{d.name} ({d.status})</MenuItem>)}</TextField></DialogContent><DialogActions><Button onClick={() => setImportOpen(false)}>Cancelar</Button><Button variant="contained" disabled={!deviceId} onClick={async () => { if (await invoke({ action: "sync_device_people", device_id: deviceId }, "Sincronización del dispositivo en cola.")) setImportOpen(false); }}>Sincronizar</Button></DialogActions></Dialog>
-    <Dialog open={Boolean(enrollment)} onClose={() => setEnrollment(null)} fullWidth maxWidth="sm"><DialogTitle>Capturar huella — {enrollment?.name}</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}><Alert severity="info">Al iniciar, coloque el dedo en el biométrico seleccionado. La plantilla no se guarda en RenovaGT.</Alert><TextField select fullWidth label="Dispositivo" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>{(devices.data ?? []).map((d) => <MenuItem key={d.id} value={d.id}>{d.name} ({d.status})</MenuItem>)}</TextField><TextField select fullWidth label="Dedo" value={fingerNo} onChange={(e) => setFingerNo(Number(e.target.value))}>{Array.from({ length: 10 }, (_, index) => <MenuItem key={index + 1} value={index + 1}>Huella {index + 1}</MenuItem>)}</TextField></Stack></DialogContent><DialogActions><Button onClick={() => setEnrollment(null)}>Cancelar</Button><Button variant="contained" disabled={!deviceId} onClick={async () => { if (enrollment && await invoke({ action: "enroll_fingerprint", employee_id: enrollment.employeeId, device_id: deviceId, finger_no: fingerNo }, "Captura iniciada; coloque el dedo en el dispositivo.")) setEnrollment(null); }}>Iniciar captura</Button></DialogActions></Dialog>
-  </>;
+  return <EmployeeManagementPage />;
 }
 
 export function DevicesPage() {
