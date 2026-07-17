@@ -17,11 +17,29 @@ export async function requireActor(req: Request, supabase: SupabaseClientLike): 
     return { type: "service_role", user_id: null };
   }
 
+  // Hosted Functions validate JWTs before invocation (verify_jwt=true). Supabase can
+  // expose a rotated service key to the runtime while internal services still use a
+  // valid legacy service-role JWT, so recognize the already-verified role claim.
+  if (token && jwtRole(token) === "service_role") {
+    return { type: "service_role", user_id: null };
+  }
+
   if (!token) throw new Error("Missing Authorization header");
 
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data.user) throw new Error("Unauthorized");
   return { type: "user", user_id: data.user.id };
+}
+
+function jwtRole(token: string) {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    return JSON.parse(atob(normalized))?.role ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function requireRole(req: Request, supabase: SupabaseClientLike, allowedRoles: string[]) {

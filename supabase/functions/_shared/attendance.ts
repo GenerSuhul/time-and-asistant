@@ -10,6 +10,7 @@ type EventRow = {
   event_type: string;
   occurred_at: string;
   source?: string;
+  device_id?: string | null;
 };
 
 const GUATEMALA_OFFSET = "-06:00";
@@ -38,6 +39,22 @@ function firstByType(events: EventRow[], type: string) {
 function lastByType(events: EventRow[], type: string) {
   const match = [...events].reverse().find((event) => event.event_type === type);
   return match ? new Date(match.occurred_at) : null;
+}
+
+function pairBreaks(events: EventRow[]) {
+  const records: { out: string; in: string | null; minutes: number }[] = [];
+  let open: EventRow | null = null;
+  for (const event of events.filter((item) => ["lunch_out", "lunch_in", "break_out", "break_in"].includes(item.event_type))) {
+    if (["lunch_out", "break_out"].includes(event.event_type)) {
+      if (open) records.push({ out: open.occurred_at, in: null, minutes: 0 });
+      open = event;
+    } else if (open) {
+      records.push({ out: open.occurred_at, in: event.occurred_at, minutes: minutesBetween(new Date(open.occurred_at), new Date(event.occurred_at)) });
+      open = null;
+    }
+  }
+  if (open) records.push({ out: open.occurred_at, in: null, minutes: 0 });
+  return records;
 }
 
 function dayOfWeek(date: string) {
@@ -98,7 +115,7 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
       await Promise.all([
         supabase
           .from("attendance_events")
-          .select("event_type, occurred_at, source")
+          .select("event_type, occurred_at, source, device_id")
           .eq("employee_id", employee.id)
           .gte("occurred_at", `${params.date}T00:00:00${GUATEMALA_OFFSET}`)
           .lt("occurred_at", `${dateEnd}T00:00:00${GUATEMALA_OFFSET}`)
@@ -131,6 +148,7 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
     const lunchOut = firstByType(events, "lunch_out");
     const lunchIn = firstByType(events, "lunch_in");
     const actualCheckOut = lastByType(events, "check_out");
+    const breakRecords = pairBreaks(events);
 
     const expectedInDate = timeOnDate(params.date, expectedCheckIn);
     const expectedOutDate = timeOnDate(params.date, expectedCheckOut);
@@ -143,6 +161,11 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
     else if (!isWorkday) status = events.length > 0 ? "complete" : "day_off";
     else if (events.length === 0) status = "absent";
     else if (actualCheckIn && !actualCheckOut) status = "incomplete";
+
+    if (!["holiday", "leave", "absent", "day_off"].includes(status) && (Boolean(actualCheckIn) !== Boolean(actualCheckOut))) {
+      status = "incomplete";
+      warnings.push(actualCheckIn ? "Registro de salida faltante." : "Registro de entrada faltante.");
+    }
 
     if (lunchOut && !lunchIn) {
       warnings.push("Salida de almuerzo sin entrada de almuerzo.");
@@ -163,7 +186,7 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
         : 0;
     const overtimeMinutes =
       actualCheckOut && expectedOutDate ? Math.max(0, minutesBetween(expectedOutDate, actualCheckOut)) : 0;
-    const lunchMinutes = lunchOut && lunchIn ? minutesBetween(lunchOut, lunchIn) : 0;
+    const lunchMinutes = breakRecords.reduce((total, item) => total + item.minutes, 0);
     const workedMinutes = actualCheckIn && actualCheckOut ? Math.max(0, minutesBetween(actualCheckIn, actualCheckOut) - lunchMinutes) : 0;
 
     if (status === "complete" && lateMinutes > 0) status = "late";
@@ -183,6 +206,8 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
         actual_check_out: actualCheckOut?.toISOString() ?? null,
         worked_minutes: workedMinutes,
         lunch_minutes: lunchMinutes,
+        break_records: breakRecords,
+        device_ids: [...new Set(events.map((event) => event.device_id).filter(Boolean))],
         late_minutes: lateMinutes,
         early_leave_minutes: earlyLeaveMinutes,
         overtime_minutes: overtimeMinutes,

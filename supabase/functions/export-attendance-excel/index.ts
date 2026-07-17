@@ -9,6 +9,8 @@ const schema = z.object({
   end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   branch_id: z.string().uuid().optional(),
   department_id: z.string().uuid().optional(),
+  attendance_group_id: z.string().uuid().optional(),
+  device_id: z.string().uuid().optional(),
   employee_id: z.string().uuid().optional(),
   status: z.string().optional()
 });
@@ -38,6 +40,7 @@ Deno.serve(async (req) => {
     if (filters.branch_id) query = query.eq("branch_id", filters.branch_id);
     if (filters.employee_id) query = query.eq("employee_id", filters.employee_id);
     if (filters.status) query = query.eq("status", filters.status);
+    if (filters.device_id) query = query.contains("device_ids", [filters.device_id]);
 
     const { data, error } = await query;
     if (error) throw error;
@@ -55,26 +58,18 @@ Deno.serve(async (req) => {
 
     const rows = (data ?? [])
       .filter((row) => !filters.department_id || row.employees?.department_id === filters.department_id)
+      .filter((row) => !filters.attendance_group_id || row.employees?.attendance_group_id === filters.attendance_group_id)
       .map((row) => ({
         Departamento: departmentById.get(row.employees?.department_id) ?? "",
         "Grupo de asistencia": groupById.get(row.employees?.attendance_group_id) ?? "",
-        Sucursal: row.branches?.name ?? "",
         Nombre: row.employees?.full_name ?? "",
-        "Codigo empleado": row.employees?.employee_code ?? "",
         Fecha: row.attendance_date,
-        Horario: row.work_schedules?.name ?? "",
-        "Entrada esperada": row.expected_check_in ?? "",
-        "Entrada real": row.actual_check_in ?? "",
-        "Minutos tarde": row.late_minutes ?? 0,
-        "Salida almuerzo": row.lunch_out ?? "",
-        "Entrada almuerzo": row.lunch_in ?? "",
-        "Duracion almuerzo": row.lunch_minutes ?? 0,
-        "Salida esperada": row.expected_check_out ?? "",
-        "Salida real": row.actual_check_out ?? "",
-        "Horas trabajadas": Number(((row.worked_minutes ?? 0) / 60).toFixed(2)),
-        "Horas extra": Number(((row.overtime_minutes ?? 0) / 60).toFixed(2)),
-        Estado: row.status,
-        Observaciones: Array.isArray(row.warnings) ? row.warnings.join("; ") : ""
+        "Hora real del registro de entrada": formatGuatemala(row.actual_check_in),
+        "Hora real de registro de salida": formatGuatemala(row.actual_check_out),
+        "Grabación de asistencia": row.actual_check_in || row.actual_check_out ? `${formatGuatemala(row.actual_check_in)} / ${formatGuatemala(row.actual_check_out)}` : "Ninguno",
+        "Duración de la pausa": `${row.lunch_minutes ?? 0} min`,
+        "Registros de descansos": formatBreaks(row.break_records),
+        "Periodo de tiempo": `${Number(((row.worked_minutes ?? 0) / 60).toFixed(2))} h`
       }));
 
     const header = [
@@ -107,3 +102,13 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
 });
+
+function formatGuatemala(value: string | null | undefined) {
+  if (!value) return "Ninguno";
+  return new Intl.DateTimeFormat("es-GT", { timeZone: "America/Guatemala", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }).format(new Date(value));
+}
+
+function formatBreaks(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return "-";
+  return value.map((item: any) => `${formatGuatemala(item?.out)} - ${formatGuatemala(item?.in)} (${item?.minutes ?? 0} min)`).join("; ");
+}

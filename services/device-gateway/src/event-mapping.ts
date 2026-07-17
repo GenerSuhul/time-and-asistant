@@ -2,6 +2,7 @@ import type { AttendanceEventType } from "@attendance/shared";
 
 const DEFAULT_EVENT_MAP: Record<string, AttendanceEventType> = {
   check_in: "check_in",
+  checkin: "check_in",
   entrada: "check_in",
   in: "check_in",
   lunch_out: "lunch_out",
@@ -11,11 +12,14 @@ const DEFAULT_EVENT_MAP: Record<string, AttendanceEventType> = {
   entrada_almuerzo: "lunch_in",
   break_lunch_in: "lunch_in",
   check_out: "check_out",
+  checkout: "check_out",
   salida: "check_out",
   out: "check_out",
   break_out: "break_out",
+  breakout: "break_out",
   descanso_salida: "break_out",
   break_in: "break_in",
+  breakin: "break_in",
   descanso_entrada: "break_in"
 };
 

@@ -2,6 +2,7 @@ import type { GatewayEventPayload } from "@attendance/shared";
 
 export type DeviceRecord = {
   id: string;
+  branch_id?: string | null;
   protocol: "isup" | "isapi" | "hik_devicegateway" | "manual" | "mock";
   name: string;
   device_identifier?: string | null;

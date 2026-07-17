@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -38,7 +38,7 @@ import { StatusChip } from "./StatusChip";
 export type CrudField = {
   name: string;
   label: string;
-  type?: "text" | "password" | "number" | "date" | "time" | "datetime-local" | "boolean" | "select" | "textarea" | "relation";
+  type?: "text" | "password" | "number" | "date" | "time" | "datetime-local" | "boolean" | "select" | "textarea" | "relation" | "relations";
   required?: boolean;
   requiredOnCreate?: boolean;
   options?: string[];
@@ -70,13 +70,16 @@ type CrudPageProps = {
   orderBy?: string;
   select?: string;
   mutationFunction?: string;
+  mutationPayloadKey?: string;
   realtimeTables?: string[];
+  headerActions?: ReactNode;
+  renderRowActions?: (row: Row) => ReactNode;
 };
 
 type Row = Record<string, unknown> & { id: string };
 
 function emptyForm(fields: CrudField[]) {
-  return Object.fromEntries(fields.map((field) => [field.name, field.defaultValue ?? (field.type === "boolean" ? false : "")]));
+  return Object.fromEntries(fields.map((field) => [field.name, field.defaultValue ?? (field.type === "boolean" ? false : field.type === "relations" ? [] : "")]));
 }
 
 function cleanPayload(values: Record<string, unknown>, fields: CrudField[]) {
@@ -107,7 +110,7 @@ async function readFunctionError(error: unknown) {
   return fallback;
 }
 
-export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select, mutationFunction, realtimeTables = [table] }: CrudPageProps) {
+export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select, mutationFunction, mutationPayloadKey = "device", realtimeTables = [table], headerActions, renderRowActions }: CrudPageProps) {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const incomingSearch = searchParams.get("search") ?? "";
@@ -116,7 +119,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>(() => emptyForm(fields));
   const visibleFields = useMemo(() => fields.filter((field) => !field.hidden && (!editing || !field.createOnly)), [editing, fields]);
-  const relationFields = useMemo(() => fields.filter((field) => field.type === "relation" && field.relation), [fields]);
+  const relationFields = useMemo(() => fields.filter((field) => (field.type === "relation" || field.type === "relations") && field.relation), [fields]);
   const realtimeKey = realtimeTables.join("|");
 
   useEffect(() => {
@@ -182,7 +185,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
       const payload = cleanPayload(form, editing ? fields.filter((field) => !field.createOnly) : fields);
       if (mutationFunction) {
         const { error } = await supabase.functions.invoke(mutationFunction, {
-          body: { action: editing ? "update" : "create", id: editing?.id, device: payload }
+          body: { action: editing ? "update" : "create", id: editing?.id, [mutationPayloadKey]: payload }
         });
         if (error) throw new Error(await readFunctionError(error));
         return;
@@ -222,7 +225,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   function startEdit(row: Row) {
     setEditing(row);
     save.reset();
-    setForm(Object.fromEntries(fields.map((field) => [field.name, row[field.name] ?? (field.type === "boolean" ? false : "")])));
+    setForm(Object.fromEntries(fields.map((field) => [field.name, row[field.name] ?? (field.type === "boolean" ? false : field.type === "relations" ? [] : "")])));
     setOpen(true);
   }
 
@@ -258,6 +261,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
+          {headerActions}
           <IconButton onClick={() => query.refetch()} aria-label="refrescar">
             <RefreshIcon />
           </IconButton>
@@ -304,6 +308,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
                   </TableCell>
                 ))}
                 <TableCell align="right">
+                  {renderRowActions?.(row)}
                   <IconButton size="small" onClick={() => startEdit(row)} aria-label="editar">
                     <EditIcon fontSize="small" />
                   </IconButton>
@@ -339,18 +344,19 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
                   <TextField
                     label={field.label}
                     required={Boolean(field.required || (!editing && field.requiredOnCreate))}
-                    select={field.type === "select" || field.type === "relation"}
+                    select={field.type === "select" || field.type === "relation" || field.type === "relations"}
                     multiline={field.type === "textarea"}
                     minRows={field.type === "textarea" ? 3 : undefined}
-                    type={field.type && !["select", "textarea", "relation"].includes(field.type) ? field.type : "text"}
+                    type={field.type && !["select", "textarea", "relation", "relations"].includes(field.type) ? field.type : "text"}
                     value={form[field.name] ?? ""}
                     helperText={field.helperText}
                     fullWidth
                     onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))}
+                    SelectProps={field.type === "relations" ? { multiple: true } : undefined}
                     InputLabelProps={field.type === "date" || field.type === "time" || field.type === "datetime-local" ? { shrink: true } : undefined}
                   >
                     {field.type === "relation" && !field.required && <MenuItem value="">Sin asignar</MenuItem>}
-                    {field.type === "relation"
+                    {field.type === "relation" || field.type === "relations"
                       ? (lookups.data?.[field.name] ?? []).map((option) => (
                           <MenuItem key={option.value} value={option.value}>
                             {option.label}

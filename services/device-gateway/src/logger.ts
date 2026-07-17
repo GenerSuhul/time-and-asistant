@@ -10,6 +10,10 @@ export const logger = pino({
       "*.SUPABASE_SERVICE_ROLE_KEY",
       "*.GATEWAY_API_SECRET",
       "*.payload.biometric_template",
+      "*.payload.fingerData",
+      "*.fingerData",
+      "*.EhomeKey",
+      "*.payload.ehome_key",
       "*.payload.pin",
       "*.payload.password"
     ],

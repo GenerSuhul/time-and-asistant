@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayEventPayload } from "@attendance/shared";
 import { config } from "../config.js";
-import { logger } from "../logger.js";
 import type { DeviceAdapter, DeviceCommand, DeviceRecord, HistoryFetchOptions } from "./DeviceAdapter.js";
 import { HikDeviceGatewayClient } from "./HikDeviceGatewayClient.js";
 
@@ -35,6 +34,26 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     await this.call("/ISAPI/AccessControl/CardInfo/Record", "POST", { CardInfo: { employeeNo: required(command, "employee_no"), cardNo: required(command, "card_no") } });
   }
 
+  async searchPeople() {
+    const people: Record<string, unknown>[] = [];
+    const searchID = randomUUID();
+    let position = 0;
+    while (true) {
+      const response = await this.call("/ISAPI/AccessControl/UserInfo/Search", "POST", {
+        UserInfoSearchCond: { searchID, searchResultPosition: position, maxResults: 30 }
+      }) as Record<string, any>;
+      const root = response.UserInfoSearch ?? response.UserInfoSearchResult ?? response;
+      const list = root.UserInfo ?? root.MatchList ?? [];
+      const records = (Array.isArray(list) ? list : [list])
+        .map((item) => item?.UserInfo ?? item).filter(Boolean);
+      people.push(...records.map(sanitizePerson));
+      position += records.length;
+      const total = Number(root.totalMatches);
+      if (!records.length || records.length < 30 || (Number.isFinite(total) && position >= total)) break;
+    }
+    return people;
+  }
+
   async deleteCard(command: DeviceCommand) {
     await this.call("/ISAPI/AccessControl/CardInfo/Delete", "PUT", { CardInfoDelCond: { CardNoList: [{ cardNo: required(command, "card_no") }] } });
   }
@@ -46,7 +65,23 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     await this.call("/ISAPI/Intelligent/FDLib/FDSearch/Delete", "PUT", { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo: required(command, "employee_no") }] } });
   }
 
-  async requestFingerprintEnrollment(_command: DeviceCommand) { throw new Error("Fingerprint collection is disabled until a secure biometric workflow is approved"); }
+  async requestFingerprintEnrollment(command: DeviceCommand) {
+    const employeeNo = required(command, "employee_no");
+    const fingerNo = Number(command.payload.finger_no ?? 1);
+    if (!Number.isInteger(fingerNo) || fingerNo < 1 || fingerNo > 10) throw new Error("finger_no must be between 1 and 10");
+    const captured = await this.call("/ISAPI/AccessControl/CaptureFingerPrint", "POST", {
+      CaptureFingerPrintCond: { fingerNo }
+    }) as Record<string, any>;
+    const fingerData = findFingerData(captured);
+    if (!fingerData) throw new Error("DeviceGateway did not return a fingerprint template");
+    try {
+      await this.call("/ISAPI/AccessControl/FingerPrintDownload", "POST", {
+        FingerPrintCfg: { employeeNo, fingerPrintID: fingerNo, fingerData }
+      });
+    } finally {
+      // The template is never persisted or logged and becomes unreachable here.
+    }
+  }
   async uploadFingerprintTemplate(_command: DeviceCommand) { throw new Error("Raw fingerprint templates are not accepted by this gateway"); }
   async deleteFingerprint(command: DeviceCommand) {
     const ids = Array.isArray(command.payload.fingerprint_ids) ? command.payload.fingerprint_ids : [1];
@@ -64,7 +99,7 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     const events: GatewayEventPayload[] = [];
     let position = 0;
     while (true) {
-      const response = await this.call("/ISAPI/AccessControl/AcsEvent", "POST", { AcsEventCond: { searchID, searchResultPosition: position, maxResults: 30, major: 0, minor: 0, startTime: from.toISOString(), endTime: to.toISOString() } }) as Record<string, any>;
+      const response = await this.call("/ISAPI/AccessControl/AcsEvent", "POST", { AcsEventCond: { searchID, searchResultPosition: position, maxResults: 30, major: 0, minor: 0, startTime: formatGatewayDate(from), endTime: formatGatewayDate(to) } }) as Record<string, any>;
       const root = response.AcsEvent ?? response.AcsEventSearchResult ?? response;
       const list = root.InfoList ?? root.MatchList ?? root.AcsEventInfo ?? [];
       const records = (Array.isArray(list) ? list : [list]).map((item) => item?.AcsEventInfo ?? item).filter(Boolean);
@@ -89,12 +124,37 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     await this.call(`/ISAPI/AccessControl/UserRightPlanTemplate/${templateId}`, "PUT", { UserRightPlanTemplate: template });
   }
 
-  async rebootDevice(command: DeviceCommand) { logger.warn({ commandId: command.id, deviceId: this.device.id }, "Reboot not executed: installed Access Control catalog has no verified passthrough reboot path"); throw new Error("Reboot endpoint is not verified for this DeviceGateway target"); }
-  async syncTime(command: DeviceCommand) { logger.warn({ commandId: command.id, deviceId: this.device.id }, "Time sync requires an explicitly verified target-device passthrough endpoint"); throw new Error("Time sync endpoint is not verified for this DeviceGateway target"); }
+  async rebootDevice(_command: DeviceCommand) { await this.call("/ISAPI/System/reboot", "PUT"); }
+  async syncTime(command: DeviceCommand) {
+    const localTime = required(command, "local_time");
+    await this.call("/ISAPI/System/time", "PUT", { Time: { localTime, timeMode: String(command.payload.time_mode ?? "manual") } });
+  }
 
   private call(path: string, method: string, body?: unknown) {
     return this.client.request(`${path}?format=json&devIndex=${encodeURIComponent(this.devIndex)}`, method, body);
   }
+}
+
+function formatGatewayDate(date: Date) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Guatemala", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+  }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}-06:00`;
+}
+
+function sanitizePerson(person: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(person).filter(([key]) => !/fingerData|face|photo|picture|image|template/i.test(key)));
+}
+
+function findFingerData(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "fingerData" && typeof item === "string" && item.length > 0) return item;
+    const nested = findFingerData(item);
+    if (nested) return nested;
+  }
+  return null;
 }
 
 function required(command: DeviceCommand, key: string) {

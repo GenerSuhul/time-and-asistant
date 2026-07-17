@@ -68,7 +68,7 @@ async function recordFailedEvent(payload: GatewayEventPayload, deviceId: string 
 }
 
 export async function enqueueEvent(payload: unknown) {
-  const parsed = gatewayEventPayloadSchema.parse(payload);
+  const parsed = sanitizeGatewayPayload(gatewayEventPayloadSchema.parse(normalizeIncomingDate(payload)));
   const device = await findDevice(parsed);
   const { data, error } = await supabase
     .from("event_ingestion_queue")
@@ -80,7 +80,7 @@ export async function enqueueEvent(payload: unknown) {
 }
 
 export async function processGatewayEvent(input: unknown, options: ProcessEventOptions = {}) {
-  const payload = gatewayEventPayloadSchema.parse(input);
+  const payload = sanitizeGatewayPayload(gatewayEventPayloadSchema.parse(normalizeIncomingDate(input)));
   let device: DeviceRow | null = null;
   let queueId = options.queueId;
 
@@ -155,7 +155,7 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
 
       if (attendanceError?.code !== "23505" && attendanceError) throw attendanceError;
 
-      const date = payload.occurred_at.slice(0, 10);
+      const date = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Guatemala", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(payload.occurred_at));
       const { error: calculateError } = await supabase.functions.invoke("calculate-daily-attendance", {
         body: {
           date,
@@ -198,4 +198,28 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
     logger.error({ err: error, deviceId: device?.id }, "Failed to process gateway event");
     throw error;
   }
+}
+
+function sanitizeGatewayPayload(payload: GatewayEventPayload): GatewayEventPayload {
+  return { ...payload, payload: sanitizeObject(payload.payload ?? {}) as Record<string, unknown> };
+}
+
+function normalizeIncomingDate(input: unknown) {
+  if (!input || typeof input !== "object") return input;
+  const copy = { ...(input as Record<string, unknown>) };
+  if (typeof copy.occurred_at === "string") {
+    let value = copy.occurred_at.trim().replace(" ", "T");
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)) value += "-06:00";
+    const parsed = new Date(value);
+    if (Number.isFinite(parsed.valueOf())) copy.occurred_at = parsed.toISOString();
+  }
+  return copy;
+}
+
+function sanitizeObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeObject);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !/finger|face|photo|picture|image|template|password|secret|ehomekey/i.test(key))
+    .map(([key, item]) => [key, sanitizeObject(item)]));
 }

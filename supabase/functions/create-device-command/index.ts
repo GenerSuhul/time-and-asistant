@@ -7,6 +7,7 @@ const schema = z.object({
   device_id: z.string().uuid(),
   command_type: z.enum([
     "sync_person",
+    "sync_device_people",
     "update_person",
     "delete_person",
     "sync_card",
