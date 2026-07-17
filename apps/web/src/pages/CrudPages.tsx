@@ -69,17 +69,18 @@ const employeeFields: CrudField[] = [
 
 const deviceFields: CrudField[] = [
   { name: "branch_id", label: "Sucursal", type: "relation", relation: { table: "branches", labelColumn: "name" } },
-  { name: "name", label: "Nombre", required: true },
-  { name: "model", label: "Modelo" },
-  { name: "serial_number", label: "Serie" },
-  { name: "firmware_version", label: "Firmware" },
-  { name: "protocol", label: "Protocolo", type: "select", options: ["isup", "isapi", "hik_devicegateway"], defaultValue: "hik_devicegateway" },
-  { name: "device_identifier", label: "Device ID / EHome ID", required: true, helperText: "Debe coincidir con el ID configurado en Platform Access / ISUP." },
-  { name: "dev_index", label: "devIndex", helperText: "Identificador asignado por Hikvision DeviceGateway; no es el número de serie." },
-  { name: "gateway_url", label: "Gateway asignado", defaultValue: "https://185.182.187.75" },
-  { name: "connection_mode", label: "Modo de conexión", type: "select", options: ["devicegateway", "direct_isup", "direct_isapi"], defaultValue: "devicegateway" },
-  { name: "offline_timeout_seconds", label: "Timeout offline (segundos)", type: "number", defaultValue: 300 },
-  { name: "timezone", label: "Zona horaria", defaultValue: "America/Guatemala", required: true }
+  { name: "name", label: "Device Name", required: true, helperText: "Nombre visible del biometrico en el sistema." },
+  { name: "device_identifier", label: "Device ID", required: true, helperText: "Debe coincidir con el Device ID configurado en ISUP 5.0." },
+  { name: "isup_key", label: "Key", type: "password", requiredOnCreate: true, helperText: "Requerida al crear. En edicion, dejala vacia para conservarla." },
+  { name: "model", label: "Modelo", defaultValue: "Hikvision", hidden: true },
+  { name: "serial_number", label: "Serie", hidden: true },
+  { name: "firmware_version", label: "Firmware", hidden: true },
+  { name: "protocol", label: "Protocolo", defaultValue: "hik_devicegateway", hidden: true },
+  { name: "dev_index", label: "devIndex", hidden: true },
+  { name: "gateway_url", label: "Gateway asignado", defaultValue: "https://185.182.187.75", hidden: true },
+  { name: "connection_mode", label: "Modo de conexion", defaultValue: "devicegateway", hidden: true },
+  { name: "offline_timeout_seconds", label: "Timeout offline", type: "number", defaultValue: 300, hidden: true },
+  { name: "timezone", label: "Zona horaria", defaultValue: "America/Guatemala", hidden: true }
 ];
 
 const assignmentFields: CrudField[] = [
@@ -116,7 +117,7 @@ export function EmployeesPage() {
 }
 
 export function DevicesPage() {
-  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "branches.name", label: "Sucursal" }, { name: "device_identifier", label: "EHome ID" }, { name: "protocol", label: "Protocolo" }, { name: "status", label: "Estado", status: true }, { name: "status_reason", label: "Razón" }, { name: "last_seen_at", label: "Última conexión" }, { name: "gateway_url", label: "Gateway" }])} />;
+  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Sucursal" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Ultima conexion" }])} />;
 }
 
 export function EmployeeDevicesPage() {

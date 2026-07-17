@@ -11,6 +11,7 @@ const editable = z.object({
   firmware_version: z.string().trim().max(120).nullable().optional(),
   protocol: z.enum(["isup", "isapi", "hik_devicegateway"]),
   device_identifier: z.string().trim().min(1).max(120),
+  isup_key: z.string().trim().max(200).nullable().optional(),
   dev_index: z.string().trim().max(120).nullable().optional(),
   gateway_url: z.string().url().nullable().optional(),
   connection_mode: z.enum(["devicegateway", "direct_isup", "direct_isapi"]),
@@ -51,15 +52,17 @@ Deno.serve(async (req) => {
     }
 
     if (input.action === "create") {
+      const device = await buildDevicePayload(input.device, { requireKey: true });
       const { data, error } = await supabase.from("devices").insert({
-        ...input.device, status: "offline", status_reason: "no_events", last_seen_at: null
+        ...device, status: "offline", status_reason: "no_events", last_seen_at: null
       }).select("*").single();
       if (error) throw error;
       return jsonResponse({ device: data }, 201);
     }
 
     if (input.action === "update") {
-      const { data, error } = await supabase.from("devices").update(input.device).eq("id", input.id).select("*").single();
+      const device = await buildDevicePayload(input.device, { requireKey: false });
+      const { data, error } = await supabase.from("devices").update(device).eq("id", input.id).select("*").single();
       if (error) throw error;
       return jsonResponse({ device: data });
     }
@@ -82,4 +85,25 @@ async function assertCompanyScope(supabase: any, userId: string, companyId: stri
     return ["super_admin", "it_admin"].includes(role?.key) && (entry.company_id === null || entry.company_id === companyId);
   });
   if (!permitted) throw new Error("Forbidden: company is outside the user's scope");
+}
+
+type EditableDevice = z.infer<typeof editable>;
+
+async function buildDevicePayload(device: EditableDevice, options: { requireKey: boolean }) {
+  const { isup_key, ...values } = device;
+  const payload: Record<string, unknown> = { ...values };
+  const key = typeof isup_key === "string" ? isup_key.trim() : "";
+
+  if (key) payload.isup_key_hash = await sha256(key);
+  if (options.requireKey && ["isup", "hik_devicegateway"].includes(device.protocol) && !key) {
+    throw new Error("Key is required for ISUP devices");
+  }
+
+  return payload;
+}
+
+async function sha256(value: string) {
+  const data = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return `sha256:${Array.from(new Uint8Array(hash)).map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

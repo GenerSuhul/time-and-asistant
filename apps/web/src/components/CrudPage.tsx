@@ -38,12 +38,14 @@ import { StatusChip } from "./StatusChip";
 export type CrudField = {
   name: string;
   label: string;
-  type?: "text" | "number" | "date" | "time" | "datetime-local" | "boolean" | "select" | "textarea" | "relation";
+  type?: "text" | "password" | "number" | "date" | "time" | "datetime-local" | "boolean" | "select" | "textarea" | "relation";
   required?: boolean;
+  requiredOnCreate?: boolean;
   options?: string[];
   helperText?: string;
   defaultValue?: unknown;
   fullWidth?: boolean;
+  hidden?: boolean;
   relation?: {
     table: string;
     labelColumn: string;
@@ -87,6 +89,22 @@ function cleanPayload(values: Record<string, unknown>, fields: CrudField[]) {
   );
 }
 
+async function readFunctionError(error: unknown) {
+  const fallback = error instanceof Error ? error.message : String(error);
+  const context = (error as { context?: Response })?.context;
+  if (!context) return fallback;
+
+  try {
+    const body = await context.clone().json();
+    if (body?.error) return String(body.error);
+    if (body?.message) return String(body.message);
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+}
+
 export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select, mutationFunction, realtimeTables = [table] }: CrudPageProps) {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -95,6 +113,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>(() => emptyForm(fields));
+  const visibleFields = useMemo(() => fields.filter((field) => !field.hidden), [fields]);
   const relationFields = useMemo(() => fields.filter((field) => field.type === "relation" && field.relation), [fields]);
   const realtimeKey = realtimeTables.join("|");
 
@@ -163,7 +182,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
         const { error } = await supabase.functions.invoke(mutationFunction, {
           body: { action: editing ? "update" : "create", id: editing?.id, device: payload }
         });
-        if (error) throw error;
+        if (error) throw new Error(await readFunctionError(error));
         return;
       }
       const request = editing
@@ -193,12 +212,14 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
 
   function startCreate() {
     setEditing(null);
+    save.reset();
     setForm(emptyForm(fields));
     setOpen(true);
   }
 
   function startEdit(row: Row) {
     setEditing(row);
+    save.reset();
     setForm(Object.fromEntries(fields.map((field) => [field.name, row[field.name] ?? (field.type === "boolean" ? false : "")])));
     setOpen(true);
   }
@@ -246,6 +267,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
       />
       {query.isLoading && <LinearProgress />}
       {query.error && <Alert severity="error">{query.error.message}</Alert>}
+      {save.error && <Alert severity="error">{save.error.message}</Alert>}
       {!query.isLoading && rows.length === 0 && <Alert severity="info">No hay registros para mostrar.</Alert>}
 
       <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
@@ -284,7 +306,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
         <DialogTitle>{editing ? "Editar" : "Nuevo"} {title}</DialogTitle>
         <DialogContent>
           <Grid2 container spacing={1.8} sx={{ pt: 1 }}>
-            {fields.map((field) =>
+            {visibleFields.map((field) =>
               field.type === "boolean" ? (
                 <Grid2 key={field.name} size={{ xs: 12, md: field.fullWidth ? 12 : 6 }}>
                   <FormControlLabel
@@ -301,7 +323,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
                 <Grid2 key={field.name} size={{ xs: 12, md: field.type === "textarea" || field.fullWidth ? 12 : 6 }}>
                   <TextField
                     label={field.label}
-                    required={field.required}
+                    required={Boolean(field.required || (!editing && field.requiredOnCreate))}
                     select={field.type === "select" || field.type === "relation"}
                     multiline={field.type === "textarea"}
                     minRows={field.type === "textarea" ? 3 : undefined}
