@@ -46,6 +46,7 @@ export type CrudField = {
   defaultValue?: unknown;
   fullWidth?: boolean;
   hidden?: boolean;
+  createOnly?: boolean;
   relation?: {
     table: string;
     labelColumn: string;
@@ -113,7 +114,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>(() => emptyForm(fields));
-  const visibleFields = useMemo(() => fields.filter((field) => !field.hidden), [fields]);
+  const visibleFields = useMemo(() => fields.filter((field) => !field.hidden && (!editing || !field.createOnly)), [editing, fields]);
   const relationFields = useMemo(() => fields.filter((field) => field.type === "relation" && field.relation), [fields]);
   const realtimeKey = realtimeTables.join("|");
 
@@ -177,7 +178,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
 
   const save = useMutation({
     mutationFn: async () => {
-      const payload = cleanPayload(form, fields);
+      const payload = cleanPayload(form, editing ? fields.filter((field) => !field.createOnly) : fields);
       if (mutationFunction) {
         const { error } = await supabase.functions.invoke(mutationFunction, {
           body: { action: editing ? "update" : "create", id: editing?.id, device: payload }

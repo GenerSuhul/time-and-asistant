@@ -6,6 +6,7 @@ import { processGatewayEvent } from "../services/event-ingestion.js";
 import { logger } from "../logger.js";
 import { supabase } from "../supabase.js";
 import { syncDeviceHistory } from "../workers/history-sync-worker.js";
+import { HikDeviceGatewayClient } from "../adapters/HikDeviceGatewayClient.js";
 
 function assertGatewaySecret(req: FastifyRequest, reply: FastifyReply) {
   if (!config.GATEWAY_API_SECRET) return;
@@ -24,6 +25,12 @@ const deviceStatusPayload = z.object({
 }).refine((value) => value.device_identifier || value.serial_number, {
   message: "device_identifier or serial_number is required"
 });
+
+const registerDevicePayload = z.object({
+  device_id: z.string().trim().min(1).max(120),
+  device_name: z.string().trim().min(1).max(120),
+  key: z.string().min(1).max(256).optional()
+}).strict();
 
 export async function registerRoutes(app: FastifyInstance) {
   app.get("/health", async () => ({
@@ -94,6 +101,79 @@ export async function registerRoutes(app: FastifyInstance) {
     }
 
     return { ok: true, device_id: device.id, history_sync_started: wasOffline };
+  });
+
+  app.post("/gateway/register-device", { preHandler: assertGatewaySecret }, async (req, reply) => {
+    const payload = registerDevicePayload.parse(req.body);
+    const keyBytes = payload.key ? Buffer.from(payload.key, "utf8") : undefined;
+    // Do not retain the plaintext in Fastify's parsed body beyond this request.
+    (req.body as Record<string, unknown>).key = "";
+
+    try {
+      if (!config.DEVICE_GATEWAY_PASSWORD) {
+        return reply.code(503).send({ error: "DeviceGateway credentials are not configured" });
+      }
+
+      const client = new HikDeviceGatewayClient(
+        config.DEVICE_GATEWAY_BASE_URL,
+        config.DEVICE_GATEWAY_USERNAME,
+        config.DEVICE_GATEWAY_PASSWORD,
+        config.DEVICE_GATEWAY_TIMEOUT_MS
+      );
+
+      let device = await client.findAccessControlDevice(payload.device_id);
+      const created = !device;
+      if (!device) {
+        if (!keyBytes) return reply.code(400).send({ error: "EHome key is required for a new DeviceGateway device" });
+        await client.addAccessControlDevice({
+          ehomeId: payload.device_id,
+          ehomeKey: keyBytes.toString("utf8"),
+          name: payload.device_name
+        });
+        device = await client.findAccessControlDevice(payload.device_id);
+      }
+      if (!device?.devIndex) throw new Error("DeviceGateway did not return a devIndex after registration");
+
+      const online = device.devStatus === "online";
+      const { data: stored, error: findError } = await supabase
+        .from("devices")
+        .select("id,status,last_seen_at")
+        .eq("device_identifier", payload.device_id)
+        .maybeSingle();
+      if (findError) throw findError;
+      if (!stored) return reply.code(404).send({ error: "Device is not registered in Supabase" });
+
+      const now = new Date().toISOString();
+      const { error: updateError } = await supabase.from("devices").update({
+        dev_index: String(device.devIndex),
+        protocol: "hik_devicegateway",
+        connection_mode: "devicegateway",
+        status: online ? "online" : "offline",
+        status_reason: online ? "devicegateway_online" : String(device.offlineHint ?? "devicegateway_offline"),
+        last_seen_at: online ? now : stored.last_seen_at
+      }).eq("id", stored.id);
+      if (updateError) throw updateError;
+
+      if (stored.status !== (online ? "online" : "offline")) {
+        await supabase.from("device_status_logs").insert({
+          device_id: stored.id,
+          status: online ? "online" : "offline",
+          message: online ? "DeviceGateway reports online" : "DeviceGateway reports offline",
+          metadata: { source: "devicegateway_registration" }
+        });
+      }
+
+      return reply.code(created ? 201 : 200).send({
+        ok: true,
+        created,
+        device_id: payload.device_id,
+        dev_index: String(device.devIndex),
+        status: online ? "online" : "offline",
+        protocol_type: device.protocolType ?? "ehomeV5"
+      });
+    } finally {
+      keyBytes?.fill(0);
+    }
   });
 
   app.get("/gateway/devices", { preHandler: assertGatewaySecret }, async () => {

@@ -2,6 +2,14 @@ import "dotenv/config";
 import { appEnvSchema } from "@attendance/shared";
 import { z } from "zod";
 
+// DeviceGateway UI credentials live outside the application .env so they can be
+// rotated independently and are never copied into the repository or build.
+try {
+  process.loadEnvFile(process.env.DEVICE_GATEWAY_CREDENTIALS_FILE ?? "/home/gsuhul/secrets/devicegateway.env");
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
+
 const envSchema = z.object({
   APP_ENV: appEnvSchema.default("local"),
   NODE_ENV: z.string().default("development"),

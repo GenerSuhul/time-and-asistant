@@ -11,7 +11,6 @@ const editable = z.object({
   firmware_version: z.string().trim().max(120).nullable().optional(),
   protocol: z.enum(["isup", "isapi", "hik_devicegateway"]),
   device_identifier: z.string().trim().min(1).max(120),
-  isup_key: z.string().trim().max(200).nullable().optional(),
   dev_index: z.string().trim().max(120).nullable().optional(),
   gateway_url: z.string().url().nullable().optional(),
   connection_mode: z.enum(["devicegateway", "direct_isup", "direct_isapi"]),
@@ -19,8 +18,12 @@ const editable = z.object({
   offline_timeout_seconds: z.number().int().min(30).max(86400)
 }).strict();
 
+const createDevice = editable.extend({
+  ehome_key: z.string().min(1).max(256)
+});
+
 const requestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("create"), device: editable }),
+  z.object({ action: z.literal("create"), device: createDevice }),
   z.object({ action: z.literal("update"), id: z.string().uuid(), device: editable }),
   z.object({ action: z.literal("delete"), id: z.string().uuid() })
 ]);
@@ -52,17 +55,29 @@ Deno.serve(async (req) => {
     }
 
     if (input.action === "create") {
-      const device = await buildDevicePayload(input.device, { requireKey: true });
+      const { ehome_key, ...deviceInput } = input.device;
       const { data, error } = await supabase.from("devices").insert({
-        ...device, status: "offline", status_reason: "no_events", last_seen_at: null
+        ...deviceInput, status: "offline", status_reason: "registration_pending", last_seen_at: null
       }).select("*").single();
       if (error) throw error;
+
+      try {
+        const encrypted = await encryptRegistrationKey(ehome_key);
+        const { error: queueError } = await supabase.from("device_registration_requests").insert({
+          device_id: data.id,
+          encrypted_key: encrypted.ciphertext,
+          iv: encrypted.iv
+        });
+        if (queueError) throw queueError;
+      } catch (queueError) {
+        await supabase.from("devices").delete().eq("id", data.id);
+        throw queueError;
+      }
       return jsonResponse({ device: data }, 201);
     }
 
     if (input.action === "update") {
-      const device = await buildDevicePayload(input.device, { requireKey: false });
-      const { data, error } = await supabase.from("devices").update(device).eq("id", input.id).select("*").single();
+      const { data, error } = await supabase.from("devices").update(input.device).eq("id", input.id).select("*").single();
       if (error) throw error;
       return jsonResponse({ device: data });
     }
@@ -77,6 +92,22 @@ Deno.serve(async (req) => {
   }
 });
 
+async function encryptRegistrationKey(value: string) {
+  const secret = Deno.env.get("GATEWAY_API_SECRET");
+  if (!secret) throw new Error("GATEWAY_API_SECRET is not configured");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  const key = await crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(value)));
+  return { ciphertext: toBase64(encrypted), iv: toBase64(iv) };
+}
+
+function toBase64(value: Uint8Array) {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 async function assertCompanyScope(supabase: any, userId: string, companyId: string) {
   const { data, error } = await supabase.from("user_roles").select("company_id,roles:role_id(key)").eq("user_id", userId);
   if (error) throw error;
@@ -85,25 +116,4 @@ async function assertCompanyScope(supabase: any, userId: string, companyId: stri
     return ["super_admin", "it_admin"].includes(role?.key) && (entry.company_id === null || entry.company_id === companyId);
   });
   if (!permitted) throw new Error("Forbidden: company is outside the user's scope");
-}
-
-type EditableDevice = z.infer<typeof editable>;
-
-async function buildDevicePayload(device: EditableDevice, options: { requireKey: boolean }) {
-  const { isup_key, ...values } = device;
-  const payload: Record<string, unknown> = { ...values };
-  const key = typeof isup_key === "string" ? isup_key.trim() : "";
-
-  if (key) payload.isup_key_hash = await sha256(key);
-  if (options.requireKey && ["isup", "hik_devicegateway"].includes(device.protocol) && !key) {
-    throw new Error("Key is required for ISUP devices");
-  }
-
-  return payload;
-}
-
-async function sha256(value: string) {
-  const data = new TextEncoder().encode(value);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return `sha256:${Array.from(new Uint8Array(hash)).map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

@@ -28,6 +28,42 @@ export class HikDeviceGatewayClient {
     if (!response.ok) throw new Error(`DeviceGateway ${method} ${url.pathname} failed with HTTP ${response.status}`);
     return data;
   }
+
+  async listAccessControlDevices() {
+    return this.request("/ISAPI/ContentMgmt/DeviceMgmt/deviceList?format=json", "POST", {
+      SearchDescription: {
+        position: 0,
+        maxResult: 100,
+        Filter: {
+          key: "",
+          devType: "AccessControl",
+          protocolType: ["ehomeV5"],
+          devStatus: ["online", "offline"]
+        }
+      }
+    });
+  }
+
+  async findAccessControlDevice(ehomeId: string) {
+    const response = await this.listAccessControlDevices() as Record<string, any>;
+    const matches = response?.SearchResult?.MatchList ?? [];
+    return matches
+      .map((match: any) => match?.Device ?? match)
+      .find((device: any) => String(device?.EhomeParams?.EhomeID ?? device?.deviceID ?? device?.deviceId ?? "") === ehomeId) ?? null;
+  }
+
+  async addAccessControlDevice(device: { ehomeId: string; ehomeKey: string; name: string }) {
+    return this.request("/ISAPI/ContentMgmt/DeviceMgmt/addDevice?format=json", "POST", {
+      DeviceInList: [{
+        Device: {
+          protocolType: "ehomeV5",
+          EhomeParams: { EhomeID: device.ehomeId, EhomeKey: device.ehomeKey },
+          devName: device.name,
+          devType: "AccessControl"
+        }
+      }]
+    });
+  }
 }
 
 function digestHeader(challenge: string, method: string, url: URL, username: string, password: string) {
@@ -50,4 +86,3 @@ function digestHeader(challenge: string, method: string, url: URL, username: str
 }
 
 const md5 = (value: string) => createHash("md5").update(value).digest("hex");
-
