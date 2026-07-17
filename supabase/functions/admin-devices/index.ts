@@ -22,9 +22,13 @@ const createDevice = editable.extend({
   ehome_key: z.string().min(1).max(256)
 });
 
+const updateDevice = editable.extend({
+  ehome_key: z.string().max(256).nullable().optional()
+});
+
 const requestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create"), device: createDevice }),
-  z.object({ action: z.literal("update"), id: z.string().uuid(), device: editable }),
+  z.object({ action: z.literal("update"), id: z.string().uuid(), device: updateDevice }),
   z.object({ action: z.literal("delete"), id: z.string().uuid() })
 ]);
 
@@ -62,13 +66,7 @@ Deno.serve(async (req) => {
       if (error) throw error;
 
       try {
-        const encrypted = await encryptRegistrationKey(ehome_key);
-        const { error: queueError } = await supabase.from("device_registration_requests").insert({
-          device_id: data.id,
-          encrypted_key: encrypted.ciphertext,
-          iv: encrypted.iv
-        });
-        if (queueError) throw queueError;
+        await queueProvisioning(supabase, data.id, ehome_key);
       } catch (queueError) {
         await supabase.from("devices").delete().eq("id", data.id);
         throw queueError;
@@ -77,8 +75,13 @@ Deno.serve(async (req) => {
     }
 
     if (input.action === "update") {
-      const { data, error } = await supabase.from("devices").update(input.device).eq("id", input.id).select("*").single();
+      const { ehome_key, ...deviceInput } = input.device;
+      const { data, error } = await supabase.from("devices").update({
+        ...deviceInput,
+        ...(ehome_key ? { status: "offline", status_reason: "registration_pending" } : {})
+      }).eq("id", input.id).select("*").single();
       if (error) throw error;
+      if (ehome_key) await queueProvisioning(supabase, input.id, ehome_key);
       return jsonResponse({ device: data });
     }
 
@@ -91,6 +94,22 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: message }, status);
   }
 });
+
+async function queueProvisioning(supabase: any, deviceId: string, value: string) {
+  const encrypted = await encryptRegistrationKey(value);
+  const { error } = await supabase.from("device_registration_requests").upsert({
+    device_id: deviceId,
+    encrypted_key: encrypted.ciphertext,
+    iv: encrypted.iv,
+    status: "pending",
+    attempts: 0,
+    last_error: null,
+    next_attempt_at: new Date().toISOString(),
+    completed_at: null,
+    updated_at: new Date().toISOString()
+  }, { onConflict: "device_id" });
+  if (error) throw error;
+}
 
 async function encryptRegistrationKey(value: string) {
   const secret = Deno.env.get("GATEWAY_API_SECRET");

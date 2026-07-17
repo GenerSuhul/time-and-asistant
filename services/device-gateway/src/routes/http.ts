@@ -8,10 +8,10 @@ import { supabase } from "../supabase.js";
 import { syncDeviceHistory } from "../workers/history-sync-worker.js";
 import { HikDeviceGatewayClient } from "../adapters/HikDeviceGatewayClient.js";
 
-function assertGatewaySecret(req: FastifyRequest, reply: FastifyReply) {
+async function assertGatewaySecret(req: FastifyRequest, reply: FastifyReply) {
   if (!config.GATEWAY_API_SECRET) return;
   if (req.headers["x-gateway-secret"] !== config.GATEWAY_API_SECRET) {
-    reply.code(401).send({ error: "Unauthorized gateway" });
+    return reply.code(401).send({ error: "Unauthorized gateway" });
   }
 }
 

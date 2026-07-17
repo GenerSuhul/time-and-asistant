@@ -71,7 +71,7 @@ const deviceFields: CrudField[] = [
   { name: "branch_id", label: "Sucursal", type: "relation", relation: { table: "branches", labelColumn: "name" } },
   { name: "name", label: "Device Name", required: true, helperText: "Nombre visible del biometrico en el sistema." },
   { name: "device_identifier", label: "Device ID", required: true, helperText: "Debe coincidir con el Device ID configurado en ISUP 5.0." },
-  { name: "ehome_key", label: "EHome Key", type: "password", requiredOnCreate: true, createOnly: true, helperText: "Se cifra para el alta y se elimina al terminar; nunca se guarda en devices ni se muestra de nuevo." },
+  { name: "ehome_key", label: "EHome Key", type: "password", requiredOnCreate: true, helperText: "Obligatoria al crear. En edición, déjela vacía salvo que necesite reprovisionar; nunca se guarda en devices." },
   { name: "model", label: "Modelo", defaultValue: "Hikvision", hidden: true },
   { name: "serial_number", label: "Serie", hidden: true },
   { name: "firmware_version", label: "Firmware", hidden: true },

@@ -14,7 +14,7 @@ function lookbackStart() {
 export async function syncDeviceHistory(deviceId?: string) {
   let query = supabase
     .from("devices")
-    .select("id, branch_id, name, protocol, device_identifier, serial_number, metadata, status")
+    .select("id, branch_id, name, protocol, device_identifier, serial_number, dev_index, metadata, status")
     .neq("protocol", "manual");
 
   if (deviceId) query = query.eq("id", deviceId);
@@ -23,6 +23,7 @@ export async function syncDeviceHistory(deviceId?: string) {
   if (error) throw error;
 
   for (const device of devices ?? []) {
+    if (device.protocol === "hik_devicegateway" && !device.dev_index) continue;
     const runStart = new Date();
     const { data: state } = await supabase
       .from("device_sync_state")
