@@ -117,7 +117,7 @@ export function EmployeesPage() {
 }
 
 export function DevicesPage() {
-  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Sucursal" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Ultima conexion" }])} />;
+  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Sucursal" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Última conexión (Guatemala)", dateTime: true }])} />;
 }
 
 export function EmployeeDevicesPage() {

@@ -59,6 +59,7 @@ export type CrudColumn = {
   name: string;
   label: string;
   status?: boolean;
+  dateTime?: boolean;
 };
 
 type CrudPageProps = {
@@ -234,6 +235,19 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
     return String(value ?? "");
   }
 
+  function columnValue(row: Row, column: CrudColumn) {
+    const value = cellValue(row, column.name);
+    if (!column.dateTime || !value) return value;
+    const date = new Date(value);
+    if (!Number.isFinite(date.valueOf())) return value;
+    return new Intl.DateTimeFormat("es-GT", {
+      timeZone: "America/Guatemala",
+      dateStyle: "medium",
+      timeStyle: "medium",
+      hour12: true
+    }).format(date);
+  }
+
   return (
     <Stack spacing={2}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }} justifyContent="space-between">
@@ -286,7 +300,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
               <TableRow key={row.id} hover>
                 {columns.map((column) => (
                   <TableCell key={column.name}>
-                    {column.status ? <StatusChip value={cellValue(row, column.name)} /> : cellValue(row, column.name)}
+                    {column.status ? <StatusChip value={cellValue(row, column.name)} /> : columnValue(row, column)}
                   </TableCell>
                 ))}
                 <TableCell align="right">
