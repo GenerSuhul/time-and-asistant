@@ -62,19 +62,19 @@ export async function registerRoutes(app: FastifyInstance) {
       .from("devices")
       .update({
         status: payload.status,
+        status_reason: payload.status === "online" ? "heartbeat" : (payload.message ?? "gateway_reported"),
         last_seen_at: payload.status === "online" ? new Date().toISOString() : device.last_seen_at,
         last_ip: payload.ip ?? device.last_ip
       })
       .eq("id", device.id);
     if (error) throw error;
 
-    await supabase.from("device_status_logs").insert({
-      device_id: device.id,
-      status: payload.status,
-      ip: payload.ip ?? null,
-      message: payload.message ?? null,
-      metadata: payload.metadata
-    });
+    if (device.status !== payload.status) {
+      await supabase.from("device_status_logs").insert({
+        device_id: device.id, status: payload.status, ip: payload.ip ?? null,
+        message: payload.message ?? null, metadata: payload.metadata
+      });
+    }
 
     await supabase.from("device_sync_state").upsert(
       {

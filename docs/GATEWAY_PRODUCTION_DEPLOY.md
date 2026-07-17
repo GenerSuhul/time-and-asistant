@@ -13,7 +13,7 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 GATEWAY_API_SECRET=<openssl-rand-hex-32>
 HOST=127.0.0.1
 PORT=8799
-DEVICE_GATEWAY_PUBLIC_URL=https://gateway.kyrosoftgs.com
+DEVICE_GATEWAY_PUBLIC_URL=https://185.182.187.75
 ISUP_LISTEN_PORT=7660
 HIK_ISUP_SDK_PATH=/opt/hikvision-isup-sdk
 LD_LIBRARY_PATH=/opt/hikvision-isup-sdk
@@ -54,7 +54,7 @@ Proxy public HTTPS to local gateway:
 ```nginx
 server {
     listen 80;
-    server_name gateway.kyrosoftgs.com;
+    server_name 185.182.187.75;
 
     location / {
         proxy_pass http://127.0.0.1:8799;
@@ -70,9 +70,9 @@ server {
 Only run Certbot after DNS points to this VPS:
 
 ```bash
-dig +short gateway.kyrosoftgs.com
+No se usa un dominio para este gateway; validar directamente la IP 185.182.187.75.
 curl -4 ifconfig.me
-sudo certbot --nginx -d gateway.kyrosoftgs.com
+No ejecutar Certbot por dominio. El TLS por IP requiere un certificado que incluya la IP como SAN.
 ```
 
 ## Firewall
@@ -111,7 +111,7 @@ Ask for compatibility with DS-K1T321MFWX / DS-K1T320MFWX and Access Control ISUP
 ## Device setup
 
 - Platform Access / ISUP: enabled.
-- Server Address: `gateway.kyrosoftgs.com`.
+- Server Address: `185.182.187.75`.
 - Port: `7660`.
 - Device ID example: `RNV-POPTUN1-AC01`.
 - ISUP Key: strong unique key per device.
@@ -123,7 +123,7 @@ Ask for compatibility with DS-K1T321MFWX / DS-K1T320MFWX and Access Control ISUP
 ```bash
 ./scripts/ops/check-gateway.sh
 curl http://127.0.0.1:8799/health
-curl https://gateway.kyrosoftgs.com/health
+curl https://185.182.187.75/health
 ```
 
 Production rules:

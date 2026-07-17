@@ -1,5 +1,5 @@
 import { createAdapter } from "../adapters/factory.js";
-import type { DeviceCommand, DeviceRecord } from "../adapters/DeviceAdapter.js";
+import type { DeviceAdapter, DeviceCommand, DeviceRecord } from "../adapters/DeviceAdapter.js";
 import { logger } from "../logger.js";
 import { supabase } from "../supabase.js";
 
@@ -20,11 +20,31 @@ async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecor
       case "sync_card":
         await adapter.syncCard(adapterCommand);
         break;
+      case "delete_card":
+        if (!("deleteCard" in adapter)) throw new Error("Adapter does not support delete_card");
+        await (adapter as DeviceAdapter & { deleteCard(command: DeviceCommand): Promise<void> }).deleteCard(adapterCommand);
+        break;
       case "sync_face":
         await adapter.syncFace(adapterCommand);
         break;
+      case "delete_face":
+        if (!("deleteFace" in adapter)) throw new Error("Adapter does not support delete_face");
+        await (adapter as DeviceAdapter & { deleteFace(command: DeviceCommand): Promise<void> }).deleteFace(adapterCommand);
+        break;
       case "enroll_fingerprint":
         await adapter.requestFingerprintEnrollment(adapterCommand);
+        break;
+      case "delete_fingerprint":
+        if (!("deleteFingerprint" in adapter)) throw new Error("Adapter does not support delete_fingerprint");
+        await (adapter as DeviceAdapter & { deleteFingerprint(command: DeviceCommand): Promise<void> }).deleteFingerprint(adapterCommand);
+        break;
+      case "remote_door":
+        if (!("remoteDoor" in adapter)) throw new Error("Adapter does not support remote_door");
+        await (adapter as DeviceAdapter & { remoteDoor(command: DeviceCommand): Promise<void> }).remoteDoor(adapterCommand);
+        break;
+      case "sync_permission_schedule":
+        if (!("syncPermissionSchedule" in adapter)) throw new Error("Adapter does not support sync_permission_schedule");
+        await (adapter as DeviceAdapter & { syncPermissionSchedule(command: DeviceCommand): Promise<void> }).syncPermissionSchedule(adapterCommand);
         break;
       case "fetch_events":
         await adapter.fetchHistoricalEvents(adapterCommand);
@@ -50,7 +70,7 @@ export async function runCommandWorkerOnce() {
   try {
     const { data: commands, error } = await supabase
       .from("device_commands")
-      .select("*, devices:device_id(id, name, protocol, device_identifier, serial_number, metadata)")
+      .select("*, devices:device_id(id, name, protocol, device_identifier, serial_number, dev_index, metadata)")
       .eq("status", "pending")
       .lte("next_run_at", new Date().toISOString())
       .order("created_at", { ascending: true })

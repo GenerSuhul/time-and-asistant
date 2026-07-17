@@ -1,6 +1,6 @@
 export type AppEnv = "local" | "staging" | "production";
 
-export type DeviceProtocol = "isup" | "isapi" | "manual" | "mock";
+export type DeviceProtocol = "isup" | "isapi" | "hik_devicegateway" | "manual" | "mock";
 export type DeviceStatus = "online" | "offline" | "error";
 
 export type AttendanceEventType =
@@ -28,8 +28,13 @@ export type DeviceCommandType =
   | "update_person"
   | "delete_person"
   | "sync_card"
+  | "delete_card"
   | "sync_face"
+  | "delete_face"
   | "enroll_fingerprint"
+  | "delete_fingerprint"
+  | "remote_door"
+  | "sync_permission_schedule"
   | "fetch_events"
   | "reboot"
   | "sync_time";

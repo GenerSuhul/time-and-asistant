@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const appEnvSchema = z.enum(["local", "staging", "production"]);
 
-export const deviceProtocolSchema = z.enum(["isup", "isapi", "manual", "mock"]);
+export const deviceProtocolSchema = z.enum(["isup", "isapi", "hik_devicegateway", "manual", "mock"]);
 export const deviceStatusSchema = z.enum(["online", "offline", "error"]);
 
 export const attendanceEventTypeSchema = z.enum([
@@ -23,7 +23,7 @@ export const gatewayEventPayloadSchema = z.object({
   serial_number: z.string().min(1).optional(),
   external_event_id: z.string().min(1).optional(),
   employee_external_id: z.string().min(1).optional(),
-  occurred_at: z.string().datetime(),
+  occurred_at: z.string().datetime({ offset: true }),
   raw_event_type: z.string().min(1),
   auth_method: authMethodSchema.default("unknown"),
   access_result: accessResultSchema.default("unknown"),
@@ -39,8 +39,13 @@ export const createDeviceCommandSchema = z.object({
     "update_person",
     "delete_person",
     "sync_card",
+    "delete_card",
     "sync_face",
+    "delete_face",
     "enroll_fingerprint",
+    "delete_fingerprint",
+    "remote_door",
+    "sync_permission_schedule",
     "fetch_events",
     "reboot",
     "sync_time"

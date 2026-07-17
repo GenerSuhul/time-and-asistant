@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { StatusChip } from "../components/StatusChip";
 import { supabase } from "../lib/supabase";
 
-const commandTypes = ["sync_person", "update_person", "delete_person", "sync_card", "sync_face", "enroll_fingerprint", "fetch_events", "reboot", "sync_time"];
+const commandTypes = ["sync_person", "update_person", "delete_person", "sync_card", "delete_card", "delete_face", "delete_fingerprint", "remote_door", "sync_permission_schedule", "fetch_events", "reboot", "sync_time"];
 
 export function DeviceCommandsPage() {
   const queryClient = useQueryClient();

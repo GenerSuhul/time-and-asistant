@@ -18,6 +18,7 @@ type DeviceRow = {
   device_identifier: string | null;
   serial_number: string | null;
   metadata: Record<string, unknown>;
+  status: "online" | "offline" | "error";
 };
 
 function eventHash(deviceId: string, payload: GatewayEventPayload) {
@@ -89,13 +90,20 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
       queueId = await createProcessingQueue(payload, device.id);
     }
 
+    const becameOnline = device.status !== "online";
     await supabase
       .from("devices")
       .update({
         status: "online",
+        status_reason: "event_received",
         last_seen_at: new Date().toISOString()
       })
       .eq("id", device.id);
+    if (becameOnline) {
+      await supabase.from("device_status_logs").insert({
+        device_id: device.id, status: "online", message: "Event received", metadata: { reason: "event_received", source: options.source ?? "realtime" }
+      });
+    }
 
     const { data: employee, error: employeeError } = payload.employee_external_id
       ? await supabase

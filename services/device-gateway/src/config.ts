@@ -14,7 +14,11 @@ const envSchema = z.object({
   ISUP_LISTEN_PORT: z.coerce.number().int().positive().default(7660),
   HIK_ISUP_SDK_PATH: z.string().optional(),
   HISTORY_SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
-  HISTORY_SYNC_LOOKBACK_HOURS: z.coerce.number().int().positive().default(72)
+  HISTORY_SYNC_LOOKBACK_HOURS: z.coerce.number().int().positive().default(72),
+  DEVICE_GATEWAY_BASE_URL: z.string().url().default("http://127.0.0.1:18080"),
+  DEVICE_GATEWAY_USERNAME: z.string().default("admin"),
+  DEVICE_GATEWAY_PASSWORD: z.string().min(1).optional(),
+  DEVICE_GATEWAY_TIMEOUT_MS: z.coerce.number().int().positive().default(15000)
 });
 
 export const config = envSchema.parse(process.env);

@@ -65,6 +65,8 @@ type CrudPageProps = {
   fields: CrudField[];
   orderBy?: string;
   select?: string;
+  mutationFunction?: string;
+  realtimeTables?: string[];
 };
 
 type Row = Record<string, unknown> & { id: string };
@@ -85,7 +87,7 @@ function cleanPayload(values: Record<string, unknown>, fields: CrudField[]) {
   );
 }
 
-export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select }: CrudPageProps) {
+export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select, mutationFunction, realtimeTables = [table] }: CrudPageProps) {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const incomingSearch = searchParams.get("search") ?? "";
@@ -94,10 +96,24 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>(() => emptyForm(fields));
   const relationFields = useMemo(() => fields.filter((field) => field.type === "relation" && field.relation), [fields]);
+  const realtimeKey = realtimeTables.join("|");
 
   useEffect(() => {
     setFilter(incomingSearch);
   }, [incomingSearch]);
+
+  useEffect(() => {
+    const channel = supabase.channel(`realtime:${table}`);
+    for (const realtimeTable of realtimeKey.split("|")) {
+      channel.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: realtimeTable },
+        () => void queryClient.invalidateQueries({ queryKey: [table] })
+      );
+    }
+    channel.subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [queryClient, realtimeKey, table]);
 
   const query = useQuery({
     queryKey: [table, orderBy, select],
@@ -143,6 +159,13 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   const save = useMutation({
     mutationFn: async () => {
       const payload = cleanPayload(form, fields);
+      if (mutationFunction) {
+        const { error } = await supabase.functions.invoke(mutationFunction, {
+          body: { action: editing ? "update" : "create", id: editing?.id, device: payload }
+        });
+        if (error) throw error;
+        return;
+      }
       const request = editing
         ? supabase.from(table).update(payload).eq("id", editing.id)
         : supabase.from(table).insert(payload);
@@ -157,6 +180,11 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
 
   const remove = useMutation({
     mutationFn: async (id: string) => {
+      if (mutationFunction) {
+        const { error } = await supabase.functions.invoke(mutationFunction, { body: { action: "delete", id } });
+        if (error) throw error;
+        return;
+      }
       const { error } = await supabase.from(table).delete().eq("id", id);
       if (error) throw error;
     },

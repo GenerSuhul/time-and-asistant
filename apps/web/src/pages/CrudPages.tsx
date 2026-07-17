@@ -73,11 +73,13 @@ const deviceFields: CrudField[] = [
   { name: "model", label: "Modelo" },
   { name: "serial_number", label: "Serie" },
   { name: "firmware_version", label: "Firmware" },
-  { name: "protocol", label: "Protocolo", type: "select", options: ["isup", "isapi", "manual"], defaultValue: "isup" },
-  { name: "device_identifier", label: "Device ID" },
-  { name: "isup_key_hash", label: "Hash ISUP Key" },
-  { name: "status", label: "Estado", type: "select", options: ["online", "offline", "error"], defaultValue: "offline" },
-  { name: "timezone", label: "Zona horaria", defaultValue: "America/Guatemala" }
+  { name: "protocol", label: "Protocolo", type: "select", options: ["isup", "isapi", "hik_devicegateway"], defaultValue: "hik_devicegateway" },
+  { name: "device_identifier", label: "Device ID / EHome ID", required: true, helperText: "Debe coincidir con el ID configurado en Platform Access / ISUP." },
+  { name: "dev_index", label: "devIndex", helperText: "Identificador asignado por Hikvision DeviceGateway; no es el número de serie." },
+  { name: "gateway_url", label: "Gateway asignado", defaultValue: "https://185.182.187.75" },
+  { name: "connection_mode", label: "Modo de conexión", type: "select", options: ["devicegateway", "direct_isup", "direct_isapi"], defaultValue: "devicegateway" },
+  { name: "offline_timeout_seconds", label: "Timeout offline (segundos)", type: "number", defaultValue: 300 },
+  { name: "timezone", label: "Zona horaria", defaultValue: "America/Guatemala", required: true }
 ];
 
 const assignmentFields: CrudField[] = [
@@ -114,7 +116,7 @@ export function EmployeesPage() {
 }
 
 export function DevicesPage() {
-  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "branches.name", label: "Sucursal" }, { name: "model", label: "Modelo" }, { name: "protocol", label: "Protocolo" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Ultima conexion" }])} />;
+  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "branches.name", label: "Sucursal" }, { name: "device_identifier", label: "EHome ID" }, { name: "protocol", label: "Protocolo" }, { name: "status", label: "Estado", status: true }, { name: "status_reason", label: "Razón" }, { name: "last_seen_at", label: "Última conexión" }, { name: "gateway_url", label: "Gateway" }])} />;
 }
 
 export function EmployeeDevicesPage() {

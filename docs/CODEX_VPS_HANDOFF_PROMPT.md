@@ -36,7 +36,7 @@ Este gateway debe quedar listo para:
 - Base de datos: Supabase Postgres.
 - Backend HTTP: Supabase Edge Functions.
 - Gateway de dispositivos: este VPS.
-- Dominio gateway: `gateway.kyrosoftgs.com`.
+- Dominio gateway: `185.182.187.75`.
 - Puerto HTTP interno del gateway: `8799`.
 - Puerto ISUP/EHome: `7660`.
 
@@ -102,7 +102,7 @@ SUPABASE_URL=https://oazdxvawzcasmhsoxvfh.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<llenar-manualmente-service-role>
 GATEWAY_API_SECRET=<clave-larga-segura>
 PORT=8799
-DEVICE_GATEWAY_PUBLIC_URL=https://gateway.kyrosoftgs.com
+DEVICE_GATEWAY_PUBLIC_URL=https://185.182.187.75
 ISUP_LISTEN_PORT=7660
 HIK_ISUP_SDK_PATH=/opt/hikvision-isup-sdk
 LD_LIBRARY_PATH=/opt/hikvision-isup-sdk
@@ -251,10 +251,10 @@ El modo ISUP real queda marcado como pendiente hasta copiar las librerias oficia
 
 ## Nginx
 
-Crear server block para `gateway.kyrosoftgs.com` que proxyee:
+Crear server block para `185.182.187.75` que proxyee:
 
 ```text
-https://gateway.kyrosoftgs.com/
+https://185.182.187.75/
 -> http://127.0.0.1:8799/
 ```
 
@@ -276,14 +276,14 @@ sudo systemctl status nginx --no-pager
 Configurar HTTPS con Certbot solo si el DNS del dominio resuelve hacia este VPS:
 
 ```bash
-dig +short gateway.kyrosoftgs.com
+dig +short 185.182.187.75
 curl -4 ifconfig.me
-sudo certbot --nginx -d gateway.kyrosoftgs.com
+sudo certbot --nginx -d 185.182.187.75
 ```
 
 Si no resuelve, dejar instrucciones exactas y no forzar Certbot.
 
-No ejecutar Certbot si `gateway.kyrosoftgs.com` no apunta realmente a la IP publica del VPS.
+No ejecutar Certbot si `185.182.187.75` no apunta realmente a la IP publica del VPS.
 
 No abrir publicamente el puerto `8799` si Nginx ya funciona. El puerto `8799` debe quedar escuchando solo localmente en `127.0.0.1` cuando sea posible.
 
@@ -326,7 +326,7 @@ curl http://127.0.0.1:8799/health
 Probar por Nginx/HTTPS:
 
 ```bash
-curl https://gateway.kyrosoftgs.com/health
+curl https://185.182.187.75/health
 ```
 
 Debe responder saludable.
@@ -401,7 +401,7 @@ Debe incluir:
 - Como configurar `LD_LIBRARY_PATH`.
 - Configuracion de dispositivos Hikvision:
   - Platform Access / ISUP.
-  - Server Address: `gateway.kyrosoftgs.com`.
+  - Server Address: `185.182.187.75`.
   - Port: `7660`.
   - Device ID unico, ejemplo `RNV-POPTUN1-AC01`.
   - ISUP Key fuerte.
