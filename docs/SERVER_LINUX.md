@@ -21,7 +21,7 @@ sudo npm install -g pm2
 
 ## Puertos
 
-- `8799`: HTTP interno/publico del gateway, idealmente detras de Nginx HTTPS.
+- `8799`: HTTP interno del gateway, limitado a `127.0.0.1`.
 - `7660`: listener ISUP/EHome configurable.
 - `80/443`: Nginx y certificados.
 
@@ -35,7 +35,6 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 GATEWAY_API_SECRET=
 PORT=8799
-DEVICE_GATEWAY_PUBLIC_URL=https://gateway.tu-dominio.com
 ISUP_LISTEN_PORT=7660
 HIK_ISUP_SDK_PATH=/opt/hikvision-isup-sdk
 LD_LIBRARY_PATH=/opt/hikvision-isup-sdk
@@ -67,9 +66,12 @@ pm2 logs attendance-device-gateway
 pm2 status
 ```
 
-## Nginx
+## Red
 
-Publica `DEVICE_GATEWAY_PUBLIC_URL` por HTTPS y reenvia al puerto local `8799`. Mantén `GATEWAY_API_SECRET` fuerte para endpoints internos.
+No publiques ni proxies el puerto `8799`. Las Edge Functions encolan comandos
+en Supabase y el worker privado del VPS los consume. DeviceGateway de Hikvision
+usa `127.0.0.1:18080` desde el VPS y `185.182.187.75:18080` solo para acceso
+externo a su UI/API vendor.
 
 ## Firewall
 

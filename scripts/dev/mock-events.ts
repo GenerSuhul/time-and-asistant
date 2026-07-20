@@ -5,7 +5,7 @@ if (appEnv === "production") {
   throw new Error("mock-events.ts is blocked when APP_ENV=production");
 }
 
-const gatewayUrl = process.env.DEVICE_GATEWAY_PUBLIC_URL ?? "http://localhost:8799";
+const gatewayUrl = process.env.GATEWAY_INTERNAL_URL ?? "http://127.0.0.1:8799";
 const gatewaySecret = process.env.GATEWAY_API_SECRET;
 
 const payload = {

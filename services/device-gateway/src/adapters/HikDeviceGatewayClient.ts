@@ -9,6 +9,20 @@ export class HikDeviceGatewayClient {
   ) {}
 
   async request(path: string, method = "GET", body?: unknown) {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.requestOnce(path, method, body);
+      } catch (error) {
+        lastError = error;
+        if (!isRetryable(error) || attempt === 3) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250 * 3 ** (attempt - 1)));
+      }
+    }
+    throw lastError;
+  }
+
+  private async requestOnce(path: string, method = "GET", body?: unknown) {
     const url = new URL(path, `${this.baseUrl.replace(/\/$/, "")}/`);
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -25,7 +39,10 @@ export class HikDeviceGatewayClient {
     const text = await response.text();
     let data: unknown = text;
     try { data = text ? JSON.parse(text) : null; } catch { /* DeviceGateway can return XML errors. */ }
-    if (!response.ok) throw new Error(`DeviceGateway ${method} ${url.pathname} failed with HTTP ${response.status}`);
+    if (!response.ok) throw new DeviceGatewayRequestError(
+      `DeviceGateway ${method} ${url.pathname} failed with HTTP ${response.status}`,
+      response.status
+    );
     return data;
   }
 
@@ -64,6 +81,17 @@ export class HikDeviceGatewayClient {
       }]
     });
   }
+}
+
+class DeviceGatewayRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+function isRetryable(error: unknown) {
+  if (error instanceof DeviceGatewayRequestError) return error.status === 429 || error.status >= 500;
+  return error instanceof Error && ["AbortError", "TimeoutError", "TypeError"].includes(error.name);
 }
 
 function digestHeader(challenge: string, method: string, url: URL, username: string, password: string) {

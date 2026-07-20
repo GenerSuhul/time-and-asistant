@@ -2,6 +2,7 @@ type SupabaseClientLike = any;
 
 type CalculateParams = {
   date: string;
+  company_id?: string;
   branch_id?: string;
   employee_id?: string;
 };
@@ -68,6 +69,7 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
     .eq("status", "active");
 
   if (params.employee_id) employeesQuery = employeesQuery.eq("id", params.employee_id);
+  if (params.company_id) employeesQuery = employeesQuery.eq("company_id", params.company_id);
   if (params.branch_id) employeesQuery = employeesQuery.eq("branch_id", params.branch_id);
 
   const { data: employees, error: employeesError } = await employeesQuery;
@@ -144,7 +146,7 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
       ...((manualAdjustments ?? []).map((event) => ({ ...event, source: "manual" })) as EventRow[])
     ].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
 
-    const actualCheckIn = firstByType(events, "check_in") ?? firstByType(events, "unknown");
+    const actualCheckIn = firstByType(events, "check_in");
     const lunchOut = firstByType(events, "lunch_out");
     const lunchIn = firstByType(events, "lunch_in");
     const actualCheckOut = lastByType(events, "check_out");

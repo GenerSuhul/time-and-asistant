@@ -13,7 +13,6 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 GATEWAY_API_SECRET=<openssl-rand-hex-32>
 HOST=127.0.0.1
 PORT=8799
-DEVICE_GATEWAY_PUBLIC_URL=https://185.182.187.75
 ISUP_LISTEN_PORT=7660
 HIK_ISUP_SDK_PATH=/opt/hikvision-isup-sdk
 LD_LIBRARY_PATH=/opt/hikvision-isup-sdk
@@ -47,33 +46,13 @@ pm2 startup
 
 Logs are written to `/var/log/hikvision-gateway`.
 
-## Nginx
+## Network boundary
 
-Proxy public HTTPS to local gateway:
-
-```nginx
-server {
-    listen 80;
-    server_name 185.182.187.75;
-
-    location / {
-        proxy_pass http://127.0.0.1:8799;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Only run Certbot after DNS points to this VPS:
-
-```bash
-No se usa un dominio para este gateway; validar directamente la IP 185.182.187.75.
-curl -4 ifconfig.me
-No ejecutar Certbot por dominio. El TLS por IP requiere un certificado que incluya la IP como SAN.
-```
+The Renova Node gateway is private and listens only on `127.0.0.1:8799`.
+Do not publish it with Nginx or Traefik. Supabase Edge Functions enqueue work in
+`device_commands`; the VPS worker polls that queue. Hikvision's own UI/API is a
+separate service on `http://185.182.187.75:18080`, while local workers use
+`http://127.0.0.1:18080`.
 
 ## Firewall
 
@@ -123,7 +102,6 @@ Ask for compatibility with DS-K1T321MFWX / DS-K1T320MFWX and Access Control ISUP
 ```bash
 ./scripts/ops/check-gateway.sh
 curl http://127.0.0.1:8799/health
-curl https://185.182.187.75/health
 ```
 
 Production rules:

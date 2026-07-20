@@ -1,11 +1,13 @@
 import { Alert, LinearProgress, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 
 export function LiveEventsPage() {
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["live-events"],
-    refetchInterval: 5000,
+    refetchInterval: 30_000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("attendance_events")
@@ -16,6 +18,19 @@ export function LiveEventsPage() {
       return data ?? [];
     }
   });
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("live-attendance-events")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "attendance_events" }, () => {
+        void queryClient.invalidateQueries({ queryKey: ["live-events"] });
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "attendance_events" }, () => {
+        void queryClient.invalidateQueries({ queryKey: ["live-events"] });
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [queryClient]);
 
   return (
     <Stack spacing={2}>
@@ -32,6 +47,7 @@ export function LiveEventsPage() {
               <TableCell>Tipo</TableCell>
               <TableCell>Fuente</TableCell>
               <TableCell>Confianza</TableCell>
+              <TableCell>Latencia de ingreso</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -43,6 +59,7 @@ export function LiveEventsPage() {
                 <TableCell>{event.event_type}</TableCell>
                 <TableCell>{event.source}</TableCell>
                 <TableCell>{event.confidence}</TableCell>
+                <TableCell>{formatLatency(event.callback_received_at, event.ingested_at ?? event.created_at)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -50,4 +67,10 @@ export function LiveEventsPage() {
       </TableContainer>
     </Stack>
   );
+}
+
+function formatLatency(receivedAt?: string | null, ingestedAt?: string | null) {
+  if (!receivedAt || !ingestedAt) return "-";
+  const milliseconds = new Date(ingestedAt).getTime() - new Date(receivedAt).getTime();
+  return Number.isFinite(milliseconds) ? `${Math.max(0, milliseconds)} ms` : "-";
 }

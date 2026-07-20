@@ -44,9 +44,11 @@ Deno.serve(async (req) => {
 
   const supabase = serviceClient();
   const rawBody = await req.text();
+  const safeBody = sanitizeObject(safeJsonParse(rawBody));
 
   try {
-    const payload = schema.parse(safeJsonParse(rawBody));
+    const payload = schema.parse(safeBody);
+    payload.payload = sanitizeObject(payload.payload) as Record<string, unknown>;
 
     const deviceQuery = payload.device_identifier
       ? supabase.from("devices").select("*").eq("device_identifier", payload.device_identifier).maybeSingle()
@@ -56,12 +58,16 @@ Deno.serve(async (req) => {
     if (deviceError) throw deviceError;
     if (!device) return jsonResponse({ error: "Device not registered" }, 404);
 
-    await supabase.from("event_ingestion_queue").insert({ device_id: device.id, payload, status: "processing" });
+    const { data: branch } = device.branch_id
+      ? await supabase.from("branches").select("company_id").eq("id", device.branch_id).maybeSingle()
+      : { data: null };
+    const companyId = branch?.company_id ?? null;
 
-    const { data: employee } = payload.employee_external_id
+    const { data: employee } = payload.employee_external_id && companyId
       ? await supabase
           .from("employees")
-          .select("id, branch_id")
+          .select("id,branch_id,employee_code,full_name")
+          .eq("company_id", companyId)
           .eq("external_employee_id", payload.employee_external_id)
           .maybeSingle()
       : { data: null };
@@ -69,7 +75,7 @@ Deno.serve(async (req) => {
     const eventHash = await sha256(
       payload.external_event_id
         ? `${device.id}:${payload.external_event_id}`
-        : `${device.id}:${payload.employee_external_id ?? ""}:${payload.occurred_at}:${payload.raw_event_type}`
+        : `${device.id}:${payload.employee_external_id ?? ""}:${payload.occurred_at}:${payload.raw_event_type}:${String(payload.payload.attendanceStatus ?? payload.payload.attendance_status ?? "").trim().toLowerCase()}`
     );
 
     const { data: rawEvent, error: rawError } = await supabase
@@ -98,47 +104,110 @@ Deno.serve(async (req) => {
       return jsonResponse({ duplicated: true, event_hash: eventHash });
     }
 
-    if (employee?.id) {
-      const { error: eventError } = await supabase.from("attendance_events").insert({
-        raw_event_id: rawEvent.id,
-        employee_id: employee.id,
-        branch_id: device.branch_id,
-        device_id: device.id,
-        event_type: payload.event_type,
-        occurred_at: payload.occurred_at,
-        source: "device",
-        confidence: payload.event_type === "unknown" ? 0.4 : 1.0
-      });
-      if (eventError && eventError.code !== "23505") throw eventError;
+    const local = guatemalaDateTime(payload.occurred_at);
+    const eventType = normalizeEventType(payload.event_type, payload.payload);
+    const ingestedAt = new Date().toISOString();
+    const callbackReceivedAt = optionalTimestamp(payload.payload.callback_received_at);
+    const { error: eventError } = await supabase.from("attendance_events").insert({
+      raw_event_id: rawEvent.id,
+      employee_id: employee?.id ?? null,
+      company_id: companyId,
+      branch_id: device.branch_id,
+      device_id: device.id,
+      device_identifier: device.device_identifier ?? device.serial_number,
+      dev_index: device.dev_index ?? null,
+      employee_no: payload.employee_external_id ?? null,
+      employee_code: employee?.employee_code ?? null,
+      person_name: payload.payload.name ?? employee?.full_name ?? null,
+      event_type: eventType,
+      occurred_at: payload.occurred_at,
+      event_time_utc: payload.occurred_at,
+      event_time_local: local.dateTime,
+      event_date_local: local.date,
+      source: "realtime",
+      raw_event_type: payload.raw_event_type,
+      major: optionalInteger(payload.payload.major),
+      minor: optionalInteger(payload.payload.minor),
+      attendance_status: payload.payload.attendanceStatus ?? payload.payload.attendance_status ?? null,
+      raw_payload: payload.payload,
+      synced_at: ingestedAt,
+      callback_received_at: callbackReceivedAt,
+      ingested_at: ingestedAt,
+      source_seen: ["realtime"],
+      unique_key: eventHash,
+      confidence: eventType === "unknown" ? 0.4 : 1.0
+    });
+    if (eventError && eventError.code !== "23505") throw eventError;
 
-      await calculateAttendanceForDate(supabase, {
-        date: payload.occurred_at.slice(0, 10),
+    const background = Promise.all([
+      employee?.id ? calculateAttendanceForDate(supabase, {
+        date: local.date,
         employee_id: employee.id,
         branch_id: device.branch_id ?? undefined
-      });
-    }
+      }) : Promise.resolve(),
+      supabase.from("devices").update({ status: "online", last_seen_at: ingestedAt }).eq("id", device.id),
+      supabase.from("device_sync_state").upsert(
+        {
+          device_id: device.id,
+          last_realtime_event_at: payload.occurred_at,
+          last_successful_event_at: payload.occurred_at,
+          last_successful_external_event_id: payload.external_event_id ?? null,
+          last_seen_at: ingestedAt,
+          is_online: true,
+          sync_status: "idle",
+          sync_error: null
+        },
+        { onConflict: "device_id" }
+      )
+    ]).catch(() => undefined);
+    runInBackground(background);
 
-    await supabase.from("devices").update({ status: "online", last_seen_at: new Date().toISOString() }).eq("id", device.id);
-    await supabase.from("device_sync_state").upsert(
-      {
-        device_id: device.id,
-        last_realtime_event_at: payload.occurred_at,
-        last_successful_event_at: payload.occurred_at,
-        last_successful_external_event_id: payload.external_event_id ?? null,
-        last_seen_at: new Date().toISOString(),
-        is_online: true,
-        sync_status: "idle",
-        sync_error: null
-      },
-      { onConflict: "device_id" }
-    );
-
-    return jsonResponse({ inserted: true, raw_event_id: rawEvent.id, event_hash: eventHash }, 201);
+    return jsonResponse({ inserted: true, raw_event_id: rawEvent.id, event_hash: eventHash, callback_received_at: callbackReceivedAt, ingested_at: ingestedAt }, 201);
   } catch (error) {
     await supabase.from("failed_event_ingestions").insert({
-      payload: safeJsonParse(rawBody),
+      payload: safeBody,
       error_message: error instanceof Error ? error.message : String(error)
     });
     return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
 });
+
+function normalizeEventType(current: string, raw: Record<string, unknown>) {
+  if (current !== "unknown") return current;
+  const value = String(raw.attendanceStatus ?? raw.attendance_status ?? "").toLowerCase();
+  return ({ checkin: "check_in", checkout: "check_out", breakout: "break_out", breakin: "break_in" } as Record<string, string>)[value] ?? "unknown";
+}
+
+function guatemalaDateTime(value: string) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Guatemala", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(value)).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  return { date, dateTime: `${date}T${parts.hour}:${parts.minute}:${parts.second}` };
+}
+
+function optionalInteger(value: unknown) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : null;
+}
+
+function optionalTimestamp(value: unknown) {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.valueOf()) ? parsed.toISOString() : null;
+}
+
+function runInBackground(promise: Promise<unknown>) {
+  const runtime = (globalThis as any).EdgeRuntime;
+  if (runtime?.waitUntil) runtime.waitUntil(promise);
+  else void promise;
+}
+
+function sanitizeObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeObject);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !/finger|face|photo|picture|image|template|password|secret|ehomekey/i.test(key))
+    .map(([key, item]) => [key, sanitizeObject(item)]));
+}

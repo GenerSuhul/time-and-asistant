@@ -2,11 +2,19 @@ import { createAdapter } from "../adapters/factory.js";
 import type { DeviceAdapter, DeviceCommand, DeviceRecord } from "../adapters/DeviceAdapter.js";
 import { logger } from "../logger.js";
 import { supabase } from "../supabase.js";
-import { processGatewayEvent } from "../services/event-ingestion.js";
+import { syncDeviceHistoryRange, type HistorySyncSummary } from "./history-sync-worker.js";
 
 let running = false;
 
-async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecord) {
+async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecord): Promise<HistorySyncSummary | void> {
+  if (adapterCommand.command_type === "fetch_events") {
+    const from = new Date(String(adapterCommand.payload.from ?? ""));
+    const to = new Date(String(adapterCommand.payload.to ?? ""));
+    if (!Number.isFinite(from.valueOf()) || !Number.isFinite(to.valueOf()) || from > to) {
+      throw new Error("fetch_events requires a valid from/to range");
+    }
+    return syncDeviceHistoryRange({ from, to, deviceIds: [device.id], trigger: "command" });
+  }
   const adapter = createAdapter(device);
   await adapter.connect();
   try {
@@ -17,7 +25,14 @@ async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecor
         break;
       case "sync_device_people":
         if (!("searchPeople" in adapter)) throw new Error("Adapter does not support person search");
-        await importPeople(device, await (adapter as DeviceAdapter & { searchPeople(): Promise<Record<string, unknown>[]> }).searchPeople());
+        {
+          const people = await (adapter as DeviceAdapter & { searchPeople(): Promise<Record<string, unknown>[]> }).searchPeople();
+          const upserted = await importPeople(device, people);
+          await supabase.from("device_sync_logs").insert({
+            device_id: device.id, command_id: adapterCommand.id, sync_type: "people", status: "success",
+            records_found: people.length, records_upserted: upserted, started_at: new Date().toISOString(), completed_at: new Date().toISOString()
+          });
+        }
         break;
       case "delete_person":
         await adapter.deletePerson(adapterCommand);
@@ -51,9 +66,6 @@ async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecor
         if (!("syncPermissionSchedule" in adapter)) throw new Error("Adapter does not support sync_permission_schedule");
         await (adapter as DeviceAdapter & { syncPermissionSchedule(command: DeviceCommand): Promise<void> }).syncPermissionSchedule(adapterCommand);
         break;
-      case "fetch_events":
-        for (const event of await adapter.fetchHistoricalEvents(adapterCommand)) await processGatewayEvent(event, { source: "history" });
-        break;
       case "reboot":
         await adapter.rebootDevice(adapterCommand);
         break;
@@ -73,6 +85,7 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
   const { data: branch, error: branchError } = await supabase.from("branches").select("company_id").eq("id", device.branch_id).single();
   if (branchError) throw branchError;
 
+  let upserted = 0;
   for (const person of people) {
     const employeeNo = String(person.employeeNo ?? person.employeeNoString ?? "").trim();
     if (!employeeNo) continue;
@@ -80,11 +93,24 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
       .from("employees").select("id,metadata").eq("company_id", branch.company_id).eq("external_employee_id", employeeNo).maybeSingle();
     if (existingError) throw existingError;
     let employeeId = existing?.id;
+    const fingerprintCount = safeCount(person.numOfFP ?? person.fingerPrintNum ?? person.fingerprintCount);
+    const faceCount = safeCount(person.numOfFace ?? person.faceNum ?? person.faceCount);
+    const cardCount = safeCount(person.numOfCard ?? person.cardNum ?? person.cardCount ?? (person.cardNo ? 1 : 0));
+    const cardNumber = typeof person.cardNo === "string" && person.cardNo.trim() ? person.cardNo.trim() : null;
+    const credentialStatus = {
+      card: cardCount > 0 ? "enrolled" : "none", fingerprint: fingerprintCount > 0 ? "enrolled" : "none",
+      face: faceCount > 0 ? "enrolled" : "none", pin: "unknown"
+    };
     if (employeeId) {
       const { error } = await supabase.from("employees").update({
-        fingerprint_count: safeCount(person.numOfFP ?? person.fingerPrintNum),
-        fingerprint_status: safeCount(person.numOfFP ?? person.fingerPrintNum) > 0 ? "enrolled" : "none",
-        metadata: { ...(existing?.metadata ?? {}), devicegateway_last_import_at: new Date().toISOString() }
+        full_name: String(person.name ?? employeeNo).trim() || employeeNo,
+        card_number: cardNumber ?? undefined,
+        fingerprint_count: fingerprintCount,
+        fingerprint_status: fingerprintCount > 0 ? "enrolled" : "none",
+        face_status: faceCount > 0 ? "enrolled" : "none",
+        credential_status: credentialStatus,
+        metadata: { ...(existing?.metadata ?? {}), source: "devicegateway", devicegateway_last_import_at: new Date().toISOString(),
+          devicegateway_counts: { cards: cardCount, fingerprints: fingerprintCount, faces: faceCount } }
       }).eq("id", employeeId);
       if (error) throw error;
     } else {
@@ -95,10 +121,13 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
         employee_code: employeeNo,
         external_employee_id: employeeNo,
         full_name: fullName,
-        card_number: typeof person.cardNo === "string" ? person.cardNo : null,
-        fingerprint_count: safeCount(person.numOfFP ?? person.fingerPrintNum),
-        fingerprint_status: safeCount(person.numOfFP ?? person.fingerPrintNum) > 0 ? "enrolled" : "none",
-        metadata: { source: "devicegateway", devicegateway_last_import_at: new Date().toISOString() }
+        card_number: cardNumber,
+        fingerprint_count: fingerprintCount,
+        fingerprint_status: fingerprintCount > 0 ? "enrolled" : "none",
+        face_status: faceCount > 0 ? "enrolled" : "none",
+        credential_status: credentialStatus,
+        metadata: { source: "devicegateway", devicegateway_last_import_at: new Date().toISOString(),
+          devicegateway_counts: { cards: cardCount, fingerprints: fingerprintCount, faces: faceCount } }
       }).select("id").single();
       if (error) throw error;
       employeeId = created.id;
@@ -112,7 +141,9 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
       last_error: null
     }, { onConflict: "employee_id,device_id" });
     if (linkError) throw linkError;
+    upserted += 1;
   }
+  return upserted;
 }
 
 const safeCount = (value: unknown) => Math.max(0, Number.isFinite(Number(value)) ? Number(value) : 0);
@@ -148,7 +179,7 @@ export async function runCommandWorkerOnce() {
         if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status: "processing", started_at: new Date().toISOString(), error_message: null }).eq("id", command.payload.session_id);
         }
-        await executeCommand(
+        const commandResult = await executeCommand(
           {
             id: command.id,
             command_type: command.command_type,
@@ -156,6 +187,13 @@ export async function runCommandWorkerOnce() {
           },
           command.devices as DeviceRecord
         );
+
+        if (commandResult) {
+          await supabase.from("device_commands").update({
+            metadata: { ...(command.metadata ?? {}), attendance_sync_result: commandResult }
+          }).eq("id", command.id);
+          if (commandResult.errors.length > 0) throw new Error(commandResult.errors[0]?.error ?? "Historical sync failed");
+        }
 
         await supabase
           .from("device_commands")
@@ -171,10 +209,12 @@ export async function runCommandWorkerOnce() {
         if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, "success");
         if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status: "success", completed_at: new Date().toISOString(), error_message: null }).eq("id", command.payload.session_id);
-          await supabase.from("employees").update({ fingerprint_status: "enrolled" }).eq("id", command.employee_id);
+          const { data: current } = await supabase.from("employees").select("fingerprint_count,credential_status").eq("id", command.employee_id).single();
+          await supabase.from("employees").update({ fingerprint_status: "enrolled", fingerprint_count: Math.max(1, Number(current?.fingerprint_count ?? 0)),
+            credential_status: { ...(current?.credential_status ?? {}), fingerprint: "enrolled" } }).eq("id", command.employee_id);
         }
       } catch (error) {
-        const shouldRetry = attempts < (command.max_attempts ?? 5);
+        const shouldRetry = command.command_type !== "fetch_events" && attempts < (command.max_attempts ?? 5);
         const backoffSeconds = Math.min(300, 2 ** attempts * 5);
         const safeError = sanitizeError(error);
         await supabase
@@ -196,6 +236,10 @@ export async function runCommandWorkerOnce() {
         if (!shouldRetry && command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status: "failed", completed_at: new Date().toISOString(), error_message: safeError }).eq("id", command.payload.session_id);
           await supabase.from("employees").update({ fingerprint_status: "failed" }).eq("id", command.employee_id);
+        }
+        if (!shouldRetry && command.command_type === "sync_device_people") {
+          await supabase.from("device_sync_logs").insert({ device_id: command.device_id, command_id: command.id,
+            sync_type: "people", status: "failed", error_message: safeError, completed_at: new Date().toISOString() });
         }
       }
     }

@@ -5,7 +5,7 @@ import { config, isProduction } from "../config.js";
 import { processGatewayEvent } from "../services/event-ingestion.js";
 import { logger } from "../logger.js";
 import { supabase } from "../supabase.js";
-import { syncDeviceHistory } from "../workers/history-sync-worker.js";
+import { guatemalaDayRange, syncDeviceHistory, syncDeviceHistoryRange } from "../workers/history-sync-worker.js";
 import { HikDeviceGatewayClient } from "../adapters/HikDeviceGatewayClient.js";
 
 async function assertGatewaySecret(req: FastifyRequest, reply: FastifyReply) {
@@ -32,6 +32,21 @@ const registerDevicePayload = z.object({
   key: z.string().min(1).max(256).optional()
 }).strict();
 
+const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const attendanceSyncPayload = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("sync_day"),
+    date: dateOnly,
+    device_ids: z.array(z.string().uuid()).min(1).max(100).optional()
+  }).strict(),
+  z.object({
+    action: z.literal("sync_range"),
+    start_date: dateOnly,
+    end_date: dateOnly,
+    device_ids: z.array(z.string().uuid()).min(1).max(100).optional()
+  }).strict()
+]);
+
 export async function registerRoutes(app: FastifyInstance) {
   app.get("/health", async () => ({
     ok: true,
@@ -49,8 +64,30 @@ export async function registerRoutes(app: FastifyInstance) {
   });
 
   app.post("/gateway/ingest-event", { preHandler: assertGatewaySecret }, async (req, reply) => {
-    const result = await processGatewayEvent(req.body, { source: "realtime" });
+    const result = await processGatewayEvent(req.body, { source: "realtime", skipQueue: true });
     return reply.code(result.inserted ? 201 : 200).send(result);
+  });
+
+  app.post("/gateway/attendance-sync", { preHandler: assertGatewaySecret }, async (req, reply) => {
+    const input = attendanceSyncPayload.parse(req.body);
+    const startDate = input.action === "sync_day" ? input.date : input.start_date;
+    const endDate = input.action === "sync_day" ? input.date : input.end_date;
+    const days = rangeDays(startDate, endDate);
+    if (days < 1 || days > 31) return reply.code(400).send({ error: "Date range must contain between 1 and 31 days" });
+    const from = guatemalaDayRange(startDate).from;
+    const to = guatemalaDayRange(endDate).to;
+    const summary = await syncDeviceHistoryRange({
+      from,
+      to,
+      deviceIds: input.device_ids,
+      trigger: "api"
+    });
+    return reply.send({
+      timezone: "America/Guatemala",
+      start_date: startDate,
+      end_date: endDate,
+      ...summary
+    });
   });
 
   app.post("/gateway/device-status", { preHandler: assertGatewaySecret }, async (req, reply) => {
@@ -193,4 +230,8 @@ export async function registerRoutes(app: FastifyInstance) {
     if (error) throw error;
     return { commands: data };
   });
+}
+
+function rangeDays(start: string, end: string) {
+  return Math.floor((new Date(`${end}T00:00:00Z`).getTime() - new Date(`${start}T00:00:00Z`).getTime()) / 86_400_000) + 1;
 }

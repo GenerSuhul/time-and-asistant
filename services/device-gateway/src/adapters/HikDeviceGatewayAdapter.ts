@@ -99,13 +99,24 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     const events: GatewayEventPayload[] = [];
     let position = 0;
     while (true) {
-      const response = await this.call("/ISAPI/AccessControl/AcsEvent", "POST", { AcsEventCond: { searchID, searchResultPosition: position, maxResults: 30, major: 0, minor: 0, startTime: formatGatewayDate(from), endTime: formatGatewayDate(to) } }) as Record<string, any>;
+      const response = await this.call("/ISAPI/AccessControl/AcsEvent", "POST", {
+        AcsEventCond: {
+          searchID,
+          searchResultPosition: position,
+          maxResults: 30,
+          major: 0,
+          minor: 0,
+          startTime: formatGatewayDate(from),
+          endTime: formatGatewayDate(to)
+        }
+      }) as Record<string, any>;
       const root = response.AcsEvent ?? response.AcsEventSearchResult ?? response;
       const list = root.InfoList ?? root.MatchList ?? root.AcsEventInfo ?? [];
       const records = (Array.isArray(list) ? list : [list]).map((item) => item?.AcsEventInfo ?? item).filter(Boolean);
       for (const event of records) events.push(normalizeHistoryEvent(this.device, event));
       position += records.length;
       if (!records.length || records.length < 30 || (Number.isFinite(Number(root.totalMatches)) && position >= Number(root.totalMatches))) break;
+      if (position > 1_000_000) throw new Error("DeviceGateway history pagination exceeded the safety limit");
     }
     return events;
   }
@@ -144,7 +155,8 @@ function formatGatewayDate(date: Date) {
 }
 
 function sanitizePerson(person: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(person).filter(([key]) => !/fingerData|face|photo|picture|image|template/i.test(key)));
+  return Object.fromEntries(Object.entries(person).filter(([key]) =>
+    !/fingerData|faceData|photoData|pictureData|imageData|template/i.test(key)));
 }
 
 function findFingerData(value: unknown): string | null {
@@ -166,14 +178,16 @@ function validity(command: DeviceCommand) {
   return { beginTime: String(command.payload.valid_from ?? "2020-01-01T00:00:00"), endTime: String(command.payload.valid_to ?? "2037-12-31T23:59:59") };
 }
 function normalizeHistoryEvent(device: DeviceRecord, event: Record<string, unknown>): GatewayEventPayload {
-  const occurredAt = String(event.time ?? event.dateTime ?? event.occurred_at ?? new Date(0).toISOString());
+  const occurredAt = String(event.time ?? event.dateTime ?? event.occurred_at ?? "");
+  const parsedTime = new Date(occurredAt);
+  if (!occurredAt || !Number.isFinite(parsedTime.valueOf())) throw new Error("DeviceGateway returned a history event without a valid time");
   const externalId = event.serialNo ?? event.eventID ?? event.serialNumber;
   return {
     device_identifier: device.device_identifier ?? device.serial_number ?? undefined,
     serial_number: device.serial_number ?? undefined,
     external_event_id: externalId == null ? undefined : String(externalId),
     employee_external_id: event.employeeNoString == null ? undefined : String(event.employeeNoString),
-    occurred_at: new Date(occurredAt).toISOString(), raw_event_type: `hikvision:${String(event.major ?? "unknown")}:${String(event.minor ?? "unknown")}`,
+    occurred_at: parsedTime.toISOString(), raw_event_type: `hikvision:${String(event.major ?? "unknown")}:${String(event.minor ?? "unknown")}`,
     auth_method: "unknown", access_result: "unknown",
     payload: Object.fromEntries(Object.entries(event).filter(([key]) => !/face|finger|picture|image|photo|template/i.test(key)))
   };

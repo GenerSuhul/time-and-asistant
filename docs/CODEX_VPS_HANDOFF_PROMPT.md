@@ -102,7 +102,6 @@ SUPABASE_URL=https://oazdxvawzcasmhsoxvfh.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<llenar-manualmente-service-role>
 GATEWAY_API_SECRET=<clave-larga-segura>
 PORT=8799
-DEVICE_GATEWAY_PUBLIC_URL=https://185.182.187.75
 ISUP_LISTEN_PORT=7660
 HIK_ISUP_SDK_PATH=/opt/hikvision-isup-sdk
 LD_LIBRARY_PATH=/opt/hikvision-isup-sdk
@@ -249,43 +248,12 @@ Debe incluir librerias `.so`, headers `.h`, demos y manual PDF. El gateway debe 
 
 El modo ISUP real queda marcado como pendiente hasta copiar las librerias oficiales `.so`, headers y documentacion del SDK en `/opt/hikvision-isup-sdk`.
 
-## Nginx
+## Limite de red del gateway Node
 
-Crear server block para `185.182.187.75` que proxyee:
-
-```text
-https://185.182.187.75/
--> http://127.0.0.1:8799/
-```
-
-Debe incluir headers:
-
-- `Host`
-- `X-Real-IP`
-- `X-Forwarded-For`
-- `X-Forwarded-Proto`
-
-Probar:
-
-```bash
-sudo nginx -t
-sudo systemctl reload nginx
-sudo systemctl status nginx --no-pager
-```
-
-Configurar HTTPS con Certbot solo si el DNS del dominio resuelve hacia este VPS:
-
-```bash
-dig +short 185.182.187.75
-curl -4 ifconfig.me
-sudo certbot --nginx -d 185.182.187.75
-```
-
-Si no resuelve, dejar instrucciones exactas y no forzar Certbot.
-
-No ejecutar Certbot si `185.182.187.75` no apunta realmente a la IP publica del VPS.
-
-No abrir publicamente el puerto `8799` si Nginx ya funciona. El puerto `8799` debe quedar escuchando solo localmente en `127.0.0.1` cuando sea posible.
+No crear un proxy Nginx o Traefik para `8799`. Debe permanecer siempre en
+`127.0.0.1`. Las Edge Functions encolan operaciones en Supabase y el worker del
+VPS las consume localmente. `185.182.187.75:18080` pertenece exclusivamente a
+la UI/API vendor de Hikvision.
 
 ## Firewall
 
@@ -304,9 +272,9 @@ Produccion recomendada:
 
 - `7660/tcp` abierto para ISUP/EHome.
 - `80/443` abiertos para HTTPS.
-- `8799/tcp` no expuesto publicamente si Nginx funciona.
+- `8799/tcp` nunca expuesto publicamente.
 
-No abrir `8799` publico salvo prueba temporal justificada.
+No abrir `8799` ni siquiera para pruebas temporales.
 
 Activar UFW:
 
@@ -323,13 +291,9 @@ Probar local:
 curl http://127.0.0.1:8799/health
 ```
 
-Probar por Nginx/HTTPS:
-
-```bash
-curl https://185.182.187.75/health
-```
-
-Debe responder saludable.
+No hay healthcheck público: `8799` debe permanecer en loopback. La IP
+`185.182.187.75:18080` corresponde a la UI/API vendor de Hikvision, no al
+gateway Node de Renova.
 
 ## Validar codigo del gateway
 

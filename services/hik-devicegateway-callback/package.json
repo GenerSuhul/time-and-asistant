@@ -1,0 +1,14 @@
+{
+  "name": "hik-devicegateway-integration",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "devices": "node src/cli.js devices",
+    "resolve-device": "node src/cli.js resolve-device AD4776127",
+    "history": "node src/cli.js history",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20" }
+}

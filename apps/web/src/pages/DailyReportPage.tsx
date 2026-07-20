@@ -21,11 +21,10 @@ import {
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useQuery } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { supabase } from "../lib/supabase";
 
 export function DailyReportPage() {
-  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [date, setDate] = useState(todayInGuatemala);
   const [branchId, setBranchId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
@@ -34,21 +33,27 @@ export function DailyReportPage() {
   const [rawOpen, setRawOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageSeverity, setMessageSeverity] = useState<"success" | "info" | "warning" | "error">("info");
+  const [syncing, setSyncing] = useState(false);
 
   const query = useQuery({
     queryKey: ["daily-report", date, branchId, employeeId, departmentId, groupId, deviceId],
     queryFn: async () => {
-      let request = supabase
-        .from("daily_attendance")
-        .select("*, employees:employee_id(full_name, employee_code, department_id, attendance_group_id), branches:branch_id(name), work_schedules:schedule_id(name)")
-        .eq("attendance_date", date)
-        .order("actual_check_in", { ascending: true });
-      if (branchId) request = request.eq("branch_id", branchId);
-      if (employeeId) request = request.eq("employee_id", employeeId);
-      if (deviceId) request = request.contains("device_ids", [deviceId]);
-      const { data, error } = await request;
+      const { data, error } = await supabase.functions.invoke("attendance-reports", {
+        body: {
+          action: "daily",
+          date,
+          branch_id: branchId || undefined,
+          employee_id: employeeId || undefined,
+          recalculate: false
+        }
+      });
       if (error) throw error;
-      return (data ?? []).filter((row) => (!departmentId || row.employees?.department_id === departmentId) && (!groupId || row.employees?.attendance_group_id === groupId));
+      return (data?.rows ?? []).filter((row: any) =>
+        (!departmentId || row.department_id === departmentId) &&
+        (!groupId || row.attendance_group_id === groupId) &&
+        (!deviceId || row.device_ids?.includes(deviceId))
+      );
     }
   });
   const lookups = useQuery({ queryKey: ["attendance-report-lookups"], queryFn: async () => {
@@ -77,15 +82,57 @@ export function DailyReportPage() {
     }
   });
 
-  async function recalculate() {
+  async function syncFromDevices() {
     setMessage(null);
-    const { error } = await supabase.functions.invoke("calculate-daily-attendance", {
-      body: { date, branch_id: branchId || undefined, employee_id: employeeId || undefined }
-    });
-    if (error) setMessage(error.message);
-    else {
-      setMessage("Recalculo ejecutado.");
-      await query.refetch();
+    setMessageSeverity("info");
+    setMessage("Buscando marcajes en dispositivos…");
+    setSyncing(true);
+    const deadline = Date.now() + 120_000;
+    let commandIds: string[] | undefined;
+    try {
+      while (Date.now() < deadline) {
+        const { data, error } = await supabase.functions.invoke("attendance-sync", {
+          body: {
+            action: "sync_day_and_recalculate",
+            date,
+            device_ids: deviceId ? [deviceId] : undefined,
+            force: true,
+            command_ids: commandIds
+          }
+        });
+        if (error) throw error;
+        commandIds = data?.command_ids;
+        if (data?.state === "processing") {
+          await delay(2_000);
+          continue;
+        }
+
+        const sync = data?.sync ?? {};
+        const report = data?.report ?? {};
+        const details = `${Number(sync.devices_scanned ?? 0)} dispositivos consultados, ${Number(sync.events_found ?? 0)} eventos encontrados, ${Number(sync.events_inserted ?? 0)} nuevos, ${Number(sync.events_skipped ?? 0)} omitidos por duplicado y ${Number(report.rows ?? 0)} filas del reporte.`;
+        if (sync.status === "failed") {
+          setMessage(`No fue posible sincronizar el día. ${details}`);
+          setMessageSeverity("error");
+        } else if (Number(sync.events_found ?? 0) === 0) {
+          setMessage(`No se encontraron marcajes para esta fecha. ${details}`);
+          setMessageSeverity(sync.status === "partial" ? "warning" : "info");
+        } else if (sync.status === "partial") {
+          setMessage(`Actualización parcial. ${details}`);
+          setMessageSeverity("warning");
+        } else {
+          setMessage(`Día actualizado. ${details}`);
+          setMessageSeverity("success");
+        }
+        await query.refetch();
+        return;
+      }
+      setMessage("La búsqueda de marcajes excedió 120 segundos. El worker puede continuar procesando; vuelve a intentar en un momento.");
+      setMessageSeverity("warning");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+      setMessageSeverity("error");
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -108,11 +155,12 @@ export function DailyReportPage() {
         <TextField size="small" select label="Grupo asistencia" value={groupId} onChange={(event) => setGroupId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.groups.map((v) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
         <TextField size="small" select label="Empleado" value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.employees.map((v) => <MenuItem key={v.id} value={v.id}>{v.full_name}</MenuItem>)}</TextField>
         <TextField size="small" select label="Dispositivo" value={deviceId} onChange={(event) => setDeviceId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.devices.map((v) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
-        <Button startIcon={<RefreshIcon />} variant="outlined" onClick={recalculate}>Recalcular</Button>
+        <Button startIcon={<RefreshIcon />} variant="outlined" onClick={syncFromDevices} disabled={syncing}>Actualizar día</Button>
         <Button startIcon={<FileDownloadIcon />} variant="contained" onClick={exportExcel}>Exportar Excel</Button>
       </Stack>
-      {message && <Alert severity={message.includes("ejecutado") ? "success" : "error"}>{message}</Alert>}
-      {query.isLoading && <LinearProgress />}
+      {message && <Alert severity={messageSeverity}>{message}</Alert>}
+      {syncing && <Alert severity="info">Buscando marcajes en dispositivos…</Alert>}
+      {(query.isFetching || syncing) && <LinearProgress />}
       {query.error && <Alert severity="error">{query.error.message}</Alert>}
       <TableContainer component={Paper}>
         <Table size="small">
@@ -125,12 +173,12 @@ export function DailyReportPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {(query.data ?? []).map((row) => (
+            {(query.data ?? []).map((row: any) => (
               <TableRow key={row.id} hover>
-                <TableCell>{lookups.data?.departments.find((v) => v.id === row.employees?.department_id)?.name ?? ""}</TableCell><TableCell>{lookups.data?.groups.find((v) => v.id === row.employees?.attendance_group_id)?.name ?? ""}</TableCell><TableCell>{row.employees?.full_name ?? row.employee_id}</TableCell>
+                <TableCell>{row.department ?? ""}</TableCell><TableCell>{row.attendance_group ?? ""}</TableCell><TableCell>{row.employee_name ?? row.employee_id}</TableCell>
                 <TableCell>{row.attendance_date}</TableCell>
                 <TableCell>{formatGt(row.actual_check_in)}</TableCell><TableCell>{formatGt(row.actual_check_out)}</TableCell>
-                <TableCell>{row.actual_check_in || row.actual_check_out ? `${formatGt(row.actual_check_in)} / ${formatGt(row.actual_check_out)}` : "Ninguno"}</TableCell><TableCell>{row.lunch_minutes ?? 0} min</TableCell><TableCell>{formatBreaks(row.break_records)}</TableCell><TableCell>{Math.round((row.worked_minutes ?? 0) / 60 * 100) / 100} h</TableCell>
+                <TableCell>{row.actual_check_in || row.actual_check_out ? `${formatGt(row.actual_check_in)} / ${formatGt(row.actual_check_out)}` : "Ninguno"}</TableCell><TableCell>{row.break_minutes ?? 0} min</TableCell><TableCell>{formatBreaks(row.break_records)}</TableCell><TableCell>{Math.round((row.attendance_minutes ?? 0) / 60 * 100) / 100} h</TableCell>
                 <TableCell>
                   <Button size="small" onClick={() => { setSelectedEmployee(row.employee_id); setRawOpen(true); }}>
                     Ver
@@ -160,4 +208,6 @@ export function DailyReportPage() {
 }
 
 const formatGt = (value?: string | null) => value ? new Intl.DateTimeFormat("es-GT", { timeZone: "America/Guatemala", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }).format(new Date(value)) : "Ninguno";
+const todayInGuatemala = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Guatemala", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const formatBreaks = (value: unknown) => Array.isArray(value) && value.length ? value.map((item) => `${formatGt(item?.out)} - ${formatGt(item?.in)} (${item?.minutes ?? 0} min)`).join("; ") : "-";
+const delay = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));

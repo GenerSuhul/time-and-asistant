@@ -18,7 +18,6 @@ const envSchema = z.object({
   GATEWAY_API_SECRET: z.string().min(16).optional(),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8799),
-  DEVICE_GATEWAY_PUBLIC_URL: z.string().url().optional(),
   ISUP_LISTEN_PORT: z.coerce.number().int().positive().default(7660),
   HIK_ISUP_SDK_PATH: z.string().optional(),
   HISTORY_SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
@@ -36,9 +35,6 @@ if (config.APP_ENV === "production") {
     throw new Error("GATEWAY_API_SECRET is required when APP_ENV=production");
   }
 
-  if (config.DEVICE_GATEWAY_PUBLIC_URL?.startsWith("http://")) {
-    throw new Error("DEVICE_GATEWAY_PUBLIC_URL must use HTTPS when APP_ENV=production");
-  }
 }
 
 export const isProduction = config.APP_ENV === "production";

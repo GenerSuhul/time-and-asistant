@@ -256,8 +256,12 @@ export function EmployeeManagementPage() {
         document_number: form.document_number.trim() || null,
         status: form.status,
         card_number: form.card_number.trim() || null,
+        pin_enabled: form.pin_enabled,
         hired_at: form.hired_at || null,
         terminated_at: form.terminated_at || null,
+        access_valid_from: form.access_valid_from || null,
+        access_valid_to: form.access_valid_to || null,
+        metadata,
         device_ids: form.target_device_ids
       };
 
@@ -268,36 +272,6 @@ export function EmployeeManagementPage() {
       }) as { employee?: AnyRow };
       const employee = data.employee;
       if (!employee?.id) throw new Error("No se recibio el empleado guardado.");
-      const { error: metadataError } = await supabase.from("employees").update({ pin_enabled: form.pin_enabled, metadata }).eq("id", employee.id);
-      if (metadataError) throw metadataError;
-
-      const previous = editing ? (assignmentsByEmployee[editing.id] ?? []) : [];
-      const previousIds = new Set(previous.map((assignment) => assignment.device_id));
-      const nextIds = new Set(form.target_device_ids);
-      const removed = [...previousIds].filter((id) => !nextIds.has(id));
-
-      if (removed.length) {
-        const { error: deleteError } = await supabase
-          .from("employee_devices")
-          .delete()
-          .eq("employee_id", employee.id)
-          .in("device_id", removed);
-        if (deleteError) throw deleteError;
-      }
-
-      const personPayload = {
-        employee_no: employeeNo(form),
-        name,
-        valid_from: dateToDeviceDateTime(form.access_valid_from),
-        valid_to: dateToDeviceDateTime(form.access_valid_to, true)
-      };
-      for (const deviceId of removed) {
-        await invokeFunction("create-device-command", {
-          device_id: deviceId,
-          command_type: "delete_person",
-          payload: { employee_no: personPayload.employee_no }
-        });
-      }
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["employees-management"] });
@@ -323,16 +297,7 @@ export function EmployeeManagementPage() {
 
   const deleteEmployee = useMutation({
     mutationFn: async (row: AnyRow) => {
-      const assignments = assignmentsByEmployee[row.id] ?? [];
-      for (const assignment of assignments) {
-        await invokeFunction("create-device-command", {
-          device_id: assignment.device_id,
-          command_type: "delete_person",
-          payload: { employee_no: row.external_employee_id || row.employee_code }
-        });
-      }
-      const { error } = await supabase.from("employees").delete().eq("id", row.id);
-      if (error) throw error;
+      await invokeFunction("admin-employees", { action: "delete", id: row.id });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["employees-management"] })
   });

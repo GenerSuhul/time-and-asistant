@@ -36,7 +36,7 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 | Capture fingerprint | `POST /ISAPI/AccessControl/CaptureFingerPrint` | `CaptureFingerPrintCond.fingerNo` | Catalog-confirmed; not executed. Response may contain raw template material. |
 | Add fingerprint | `POST /ISAPI/AccessControl/FingerPrintDownload` | `FingerPrintCfg.employeeNo`, `fingerPrintID`, **`fingerData`** | Catalog-confirmed; raw template storage is blocked. Passthrough only after controlled enrollment validation. |
 | Delete fingerprint | `PUT /ISAPI/AccessControl/FingerPrint/Delete` | `FingerPrintDelete.EmployeeNoDetail` | Catalog-confirmed; existing adapter matches. |
-| Search history event | `POST /ISAPI/AccessControl/AcsEvent` | `AcsEventCond.searchID`, position, page size; optional major/minor/time range supported by deployed adapter | Catalog-confirmed; pagination worker exists. |
+| Search history event | `POST /ISAPI/AccessControl/AcsEvent` | `AcsEventCond.searchID`, `searchResultPosition`, `maxResults`, `major`, `minor`, `startTime`, `endTime` | Live-validated on both production devices. The installed gateway caps pages at 30 even when 100 is requested. |
 | Remote control door | `PUT /ISAPI/AccessControl/RemoteControl/door/<ID>` | `RemoteControlDoor.cmd` (`open` in installed example) | Catalog-confirmed; not executed during audit. |
 | Get door parameters | `GET /ISAPI/AccessControl/Door/param/<doorID>` | none | Catalog-confirmed. |
 | Set door parameters | `PUT /ISAPI/AccessControl/Door/param/<doorID>` | Installed example uses `{"doorName":"test"}` | Catalog-confirmed; not executed. |
@@ -63,6 +63,9 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 - No separate “Platform Attendance” configuration endpoint or canonical custom Check In/Check Out/Break mapping appears in the installed catalog. Therefore event direction must be derived only from fields actually returned by callbacks/history (`attendanceStatus`, major/minor and device-specific values), with unknown values preserved as `unknown`.
 - Custom labels must be stored as an explicit RenovaGT mapping, never guessed from event order.
 - Images, face data, fingerprint data and template-like fields must be removed from persisted raw payloads.
+- The installed SDK sample also accepts `AcsEventSearchDescription` with a nested `AcsEventFilter`, but production uses the `AcsEventCond` body shown by API Testing. Responses can use either `AcsEvent` or `AcsEventSearchResult`; the adapter accepts both.
+- `185.182.187.75:18080` is the public vendor UI/API. Processes on this VPS must call the same service through `http://127.0.0.1:18080`.
+- The Renova Node gateway remains private on `127.0.0.1:8799`. Edge Functions enqueue `fetch_events` in Supabase; the private worker consumes the command and returns its summary in command metadata. Do not expose or proxy port 8799.
 
 ## Biometric decision
 

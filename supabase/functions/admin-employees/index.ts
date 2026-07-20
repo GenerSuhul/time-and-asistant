@@ -10,8 +10,11 @@ const employeeSchema = z.object({
   full_name: z.string().trim().min(1).max(160), email: z.string().email().nullable().optional(),
   phone: z.string().max(40).nullable().optional(), document_number: z.string().max(80).nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).default("active"),
-  card_number: z.string().trim().max(64).nullable().optional(), hired_at: z.string().nullable().optional(),
-  terminated_at: z.string().nullable().optional(), device_ids: z.array(z.string().uuid()).default([])
+  card_number: z.string().trim().max(64).nullable().optional(), pin_enabled: z.boolean().default(false),
+  hired_at: z.string().nullable().optional(), terminated_at: z.string().nullable().optional(),
+  access_valid_from: z.string().nullable().optional(), access_valid_to: z.string().nullable().optional(),
+  device_ids: z.array(z.string().uuid()).max(200).default([]),
+  metadata: z.record(z.unknown()).default({})
 });
 
 const requestSchema = z.discriminatedUnion("action", [
@@ -38,7 +41,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ command }, 202);
     }
     if (input.action === "delete") {
-      const { error } = await supabase.from("employees").delete().eq("id", input.id);
+      const { error } = await supabase.rpc("admin_delete_employee", { p_employee_id: input.id, p_requested_by: actor.user_id });
       if (error) throw error;
       return jsonResponse({ ok: true });
     }
@@ -70,31 +73,15 @@ Deno.serve(async (req) => {
       return jsonResponse({ session }, 202);
     }
 
-    const { device_ids, ...employee } = input.employee;
-    const externalId = employee.external_employee_id || employee.employee_code;
-    const commandType = input.action === "create" ? "sync_person" : "update_person";
-    const mutation = input.action === "create"
-      ? supabase.from("employees").insert({ ...employee, external_employee_id: externalId })
-      : supabase.from("employees").update({ ...employee, external_employee_id: externalId }).eq("id", input.id);
-    const { data: saved, error: employeeError } = await mutation.select("*").single();
+    const { device_ids, metadata, ...employee } = input.employee;
+    const safeMetadata = sanitizeMetadata(metadata);
+    const { data: saved, error: employeeError } = await supabase.rpc("admin_save_employee", {
+      p_employee: { ...employee, metadata: safeMetadata },
+      p_device_ids: [...new Set(device_ids)],
+      p_requested_by: actor.user_id,
+      p_employee_id: input.action === "update" ? input.id : null
+    });
     if (employeeError) throw employeeError;
-
-    for (const deviceId of device_ids) {
-      const { error: linkError } = await supabase.from("employee_devices").upsert({
-        employee_id: saved.id, device_id: deviceId, external_person_id: externalId, sync_status: "pending", last_error: null
-      }, { onConflict: "employee_id,device_id" });
-      if (linkError) throw linkError;
-      const commands = [{
-        device_id: deviceId, employee_id: saved.id, command_type: commandType, requested_by: actor.user_id,
-        payload: { employee_no: externalId, name: saved.full_name }
-      }];
-      if (employee.card_number) commands.push({
-        device_id: deviceId, employee_id: saved.id, command_type: "sync_card", requested_by: actor.user_id,
-        payload: { employee_no: externalId, card_no: employee.card_number }
-      });
-      const { error: commandError } = await supabase.from("device_commands").insert(commands);
-      if (commandError) throw commandError;
-    }
     return jsonResponse({ employee: saved, queued_devices: device_ids.length }, input.action === "create" ? 201 : 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -108,4 +95,20 @@ async function enqueueImport(supabase: any, deviceId: string, requestedBy: strin
   }).select("*").single();
   if (error) throw error;
   return data;
+}
+
+function sanitizeMetadata(value: Record<string, unknown>) {
+  const allowed = new Set(["notes", "source", "custom_fields"]);
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => allowed.has(key) && !/finger|face|template|password|secret|key|token/i.test(key))
+    .map(([key, item]) => [key, sanitizeMetadataValue(item)]));
+}
+
+function sanitizeMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.slice(0, 100).map(sanitizeMetadataValue);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !/finger|face|template|password|secret|key|token/i.test(key))
+    .map(([key, item]) => [key, sanitizeMetadataValue(item)]));
+  if (typeof value === "string") return value.slice(0, 1000);
+  return value;
 }
