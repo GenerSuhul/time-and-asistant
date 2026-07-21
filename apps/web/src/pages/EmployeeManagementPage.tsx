@@ -30,8 +30,10 @@ import {
   TableRow,
   Tabs,
   TextField,
-  Typography
+  Typography,
+  useMediaQuery
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import AddIcon from "@mui/icons-material/Add";
 import BadgeIcon from "@mui/icons-material/Badge";
 import CloseIcon from "@mui/icons-material/Close";
@@ -101,13 +103,8 @@ function relationLabel(value: AnyRow | AnyRow[] | null | undefined, key = "name"
   return row?.[key] ?? "";
 }
 
-function dateToDeviceDateTime(value: string, endOfDay = false) {
-  if (!value) return endOfDay ? "2036-12-31T23:59:59" : "2020-01-01T00:00:00";
-  return `${value}T${endOfDay ? "23:59:59" : "00:00:00"}`;
-}
-
-function employeeNo(form: EmployeeForm) {
-  return (form.external_employee_id || form.employee_code).trim();
+function freshForm(companyId = ""): EmployeeForm {
+  return { ...emptyForm, company_id: companyId, target_device_ids: [] };
 }
 
 function formFromEmployee(row: AnyRow, assignments: AnyRow[]): EmployeeForm {
@@ -144,6 +141,8 @@ async function invokeFunction(name: string, body: Record<string, unknown>) {
 
 export function EmployeeManagementPage() {
   const queryClient = useQueryClient();
+  const theme = useTheme();
+  const fullScreenEditor = useMediaQuery(theme.breakpoints.down("sm"));
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("active");
   const [open, setOpen] = useState(false);
@@ -151,11 +150,12 @@ export function EmployeeManagementPage() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("basic");
   const [editing, setEditing] = useState<AnyRow | null>(null);
-  const [form, setForm] = useState<EmployeeForm>(emptyForm);
-  const [keepAdding, setKeepAdding] = useState(false);
+  const [form, setForm] = useState<EmployeeForm>(() => freshForm());
   const [fingerDeviceId, setFingerDeviceId] = useState("");
   const [fingerNo, setFingerNo] = useState(1);
   const [syncDeviceId, setSyncDeviceId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<AnyRow | null>(null);
+  const [notice, setNotice] = useState("");
 
   const catalog = useQuery({
     queryKey: ["employee-catalog"],
@@ -189,7 +189,9 @@ export function EmployeeManagementPage() {
           .select("*, companies:company_id(name), branches:branch_id(name), departments:department_id(name), attendance_groups:attendance_group_id(name)")
           .order("full_name", { ascending: true }),
         supabase.from("employee_devices").select("*, devices:device_id(id,name,status,dev_index)").order("created_at", { ascending: true }),
-        supabase.from("device_commands").select("id,status,payload,command_type,device_id,created_at").order("created_at", { ascending: false }).limit(200)
+        supabase.from("device_commands")
+          .select("id,status,payload,command_type,device_id,employee_id,error_message,created_at,devices:device_id(name)")
+          .order("created_at", { ascending: false }).limit(200)
       ]);
       if (people.error) throw people.error;
       if (assignments.error) throw assignments.error;
@@ -232,8 +234,15 @@ export function EmployeeManagementPage() {
     };
   }, [employees.data?.people]);
 
+  const commandFailures = useMemo(
+    () => (employees.data?.commands ?? [])
+      .filter((command) => command.status !== "success" && command.status !== "cancelled" && command.error_message)
+      .slice(0, 5),
+    [employees.data?.commands]
+  );
+
   const saveEmployee = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ continueAdding }: { continueAdding: boolean }) => {
       const code = form.employee_code.trim();
       const name = form.full_name.trim();
       if (!form.company_id || !code || !name) throw new Error("Empresa, ID y nombre son obligatorios.");
@@ -272,26 +281,27 @@ export function EmployeeManagementPage() {
       }) as { employee?: AnyRow };
       const employee = data.employee;
       if (!employee?.id) throw new Error("No se recibio el empleado guardado.");
+      return { employee, continueAdding };
     },
-    onSuccess: async () => {
+    onSuccess: async ({ continueAdding }) => {
       await queryClient.invalidateQueries({ queryKey: ["employees-management"] });
       setCredentialOpen(false);
-      if (keepAdding && !editing) {
-        setForm((current) => ({
-          ...emptyForm,
-          company_id: current.company_id,
-          branch_id: current.branch_id,
-          department_id: current.department_id,
-          attendance_group_id: current.attendance_group_id,
-          target_device_ids: current.target_device_ids,
-          hired_at: today,
-          access_valid_from: today
-        }));
+      setFingerDeviceId("");
+      setFingerNo(1);
+      enrollFingerprint.reset();
+      if (continueAdding && !editing) {
+        const firstCompany = catalog.data?.companies[0]?.id ?? "";
+        setEditing(null);
+        setForm(freshForm(firstCompany));
         setActiveTab("basic");
+        setNotice("Persona creada. El formulario quedó listo para añadir otra persona.");
       } else {
         setOpen(false);
+        setEditing(null);
+        setForm(freshForm());
+        setActiveTab("basic");
+        setNotice(editing ? "Persona actualizada correctamente." : "Persona creada correctamente.");
       }
-      setKeepAdding(false);
     }
   });
 
@@ -299,7 +309,11 @@ export function EmployeeManagementPage() {
     mutationFn: async (row: AnyRow) => {
       await invokeFunction("admin-employees", { action: "delete", id: row.id });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["employees-management"] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["employees-management"] });
+      setNotice("Persona eliminada. Las bajas en dispositivos asignados quedaron encoladas.");
+      setDeleteTarget(null);
+    }
   });
 
   const enrollFingerprint = useMutation({
@@ -313,7 +327,10 @@ export function EmployeeManagementPage() {
         finger_no: fingerNo
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["employees-management"] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["employees-management"] });
+      setNotice("La solicitud de captura de huella quedó encolada.");
+    }
   });
 
   const syncPeople = useMutation({
@@ -324,6 +341,8 @@ export function EmployeeManagementPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["employees-management"] });
       setSyncOpen(false);
+      setSyncDeviceId("");
+      setNotice("Sincronización de personas encolada para el dispositivo seleccionado.");
     }
   });
 
@@ -331,28 +350,64 @@ export function EmployeeManagementPage() {
     mutationFn: async () => {
       await invokeFunction("admin-employees", { action: "sync_all_device_people" });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["employees-management"] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["employees-management"] });
+      setNotice("Sincronización de personas encolada para todos los dispositivos enlazados.");
+    }
   });
 
   function startCreate() {
     const firstCompany = catalog.data?.companies[0]?.id ?? "";
+    setCredentialOpen(false);
+    setFingerDeviceId("");
+    setFingerNo(1);
+    enrollFingerprint.reset();
+    saveEmployee.reset();
     setEditing(null);
-    setKeepAdding(false);
-    setForm({ ...emptyForm, company_id: firstCompany });
+    setForm(freshForm(firstCompany));
     setActiveTab("basic");
     setOpen(true);
   }
 
   function startEdit(row: AnyRow) {
+    setCredentialOpen(false);
+    setFingerDeviceId("");
+    setFingerNo(1);
+    enrollFingerprint.reset();
+    saveEmployee.reset();
     setEditing(row);
-    setKeepAdding(false);
     setForm(formFromEmployee(row, assignmentsByEmployee[row.id] ?? []));
-    setFingerDeviceId((assignmentsByEmployee[row.id] ?? [])[0]?.device_id ?? "");
     setActiveTab("basic");
     setOpen(true);
   }
 
+  function closeCredentialDrawer() {
+    setCredentialOpen(false);
+    setFingerDeviceId("");
+    setFingerNo(1);
+    enrollFingerprint.reset();
+  }
+
+  function closeEmployeeEditor() {
+    if (saveEmployee.isPending) return;
+    setOpen(false);
+    closeCredentialDrawer();
+    setEditing(null);
+    setForm(freshForm());
+    setActiveTab("basic");
+  }
+
+  function openCredentialDrawer() {
+    if (!open) return;
+    setFingerDeviceId("");
+    setFingerNo(1);
+    enrollFingerprint.reset();
+    setCredentialOpen(true);
+  }
+
   const deviceOptions = catalog.data?.devices ?? [];
+  const persistedDeviceIds = new Set((form.id ? assignmentsByEmployee[form.id] ?? [] : []).map((assignment) => assignment.device_id));
+  const fingerprintDeviceOptions = deviceOptions.filter((device) => persistedDeviceIds.has(device.id));
 
   return (
     <Stack spacing={2.2}>
@@ -361,11 +416,11 @@ export function EmployeeManagementPage() {
           <Typography variant="h4">Personas</Typography>
           <Typography color="text.secondary">Gestiona empleados, dispositivos destino y credenciales operativas.</Typography>
         </Box>
-        <Stack direction="row" spacing={1}>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ width: { xs: "100%", md: "auto" } }}>
           <IconButton aria-label="refrescar" onClick={() => employees.refetch()}>
             <RefreshIcon />
           </IconButton>
-          <Button variant="outlined" startIcon={<SyncIcon />} onClick={() => setSyncOpen(true)}>
+          <Button variant="outlined" startIcon={<SyncIcon />} onClick={() => setSyncOpen(true)} sx={{ whiteSpace: "nowrap" }}>
             Sincronizar desde dispositivo
           </Button>
           <Button variant="outlined" startIcon={<SyncIcon />} onClick={() => syncAllPeople.mutate()} disabled={syncAllPeople.isPending}>
@@ -423,6 +478,20 @@ export function EmployeeManagementPage() {
       {saveEmployee.error && <Alert severity="error">{saveEmployee.error.message}</Alert>}
       {deleteEmployee.error && <Alert severity="error">{deleteEmployee.error.message}</Alert>}
       {syncAllPeople.error && <Alert severity="error">{syncAllPeople.error.message}</Alert>}
+      {notice && <Alert severity="success" onClose={() => setNotice("")}>{notice}</Alert>}
+      {commandFailures.length > 0 && (
+        <Alert severity="error">
+          <Typography variant="subtitle2">Hay comandos de dispositivo fallidos que requieren revisión:</Typography>
+          <Box component="ul" sx={{ my: 0.5, pl: 2.5 }}>
+            {commandFailures.map((command) => (
+              <li key={command.id}>
+                {command.command_type} · {relationLabel(command.devices) || command.device_id} · {command.status}
+                {command.payload?.employee_no ? ` · persona ${command.payload.employee_no}` : ""}: {command.error_message}
+              </li>
+            ))}
+          </Box>
+        </Alert>
+      )}
 
       <TableContainer component={Paper} variant="outlined" sx={{ boxShadow: "none" }}>
         <Table size="small">
@@ -453,7 +522,14 @@ export function EmployeeManagementPage() {
                   <TableCell>
                     <Stack direction="row" spacing={0.6} flexWrap="wrap" useFlexGap>
                       {assignments.length ? assignments.map((assignment) => (
-                        <Chip key={assignment.id} size="small" variant="outlined" label={assignment.devices?.name ?? assignment.device_id} />
+                        <Chip
+                          key={assignment.id}
+                          size="small"
+                          variant="outlined"
+                          color={assignment.sync_status === "failed" ? "error" : assignment.sync_status === "success" ? "success" : "default"}
+                          label={`${assignment.devices?.name ?? assignment.device_id}${assignment.sync_status ? ` · ${assignment.sync_status}` : ""}`}
+                          title={assignment.last_error ?? ""}
+                        />
                       )) : <Typography variant="caption" color="text.secondary">Sin destino</Typography>}
                     </Stack>
                   </TableCell>
@@ -468,7 +544,13 @@ export function EmployeeManagementPage() {
                     <IconButton size="small" onClick={() => startEdit(row)} aria-label="editar persona">
                       <EditIcon fontSize="small" />
                     </IconButton>
-                    <IconButton size="small" color="error" onClick={() => deleteEmployee.mutate(row)} aria-label="eliminar persona">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => { deleteEmployee.reset(); setDeleteTarget(row); }}
+                      aria-label="eliminar persona"
+                      disabled={deleteEmployee.isPending}
+                    >
                       <DeleteIcon fontSize="small" />
                     </IconButton>
                   </TableCell>
@@ -479,23 +561,38 @@ export function EmployeeManagementPage() {
         </Table>
       </TableContainer>
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="lg">
+      <Dialog
+        open={open}
+        onClose={closeEmployeeEditor}
+        fullWidth
+        fullScreen={fullScreenEditor}
+        maxWidth="lg"
+        scroll="paper"
+        PaperProps={{ sx: { maxHeight: { sm: "calc(100dvh - 32px)" } } }}
+      >
         <DialogTitle sx={{ pb: 0 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Box>
               <Typography variant="h5">{editing ? "Editar persona" : "Anadir persona"}</Typography>
               <Typography variant="body2" color="text.secondary">Informacion operativa y credenciales por dispositivo.</Typography>
             </Box>
-            <IconButton onClick={() => setOpen(false)} aria-label="cerrar">
+            <IconButton onClick={closeEmployeeEditor} aria-label="cerrar" disabled={saveEmployee.isPending}>
               <CloseIcon />
             </IconButton>
           </Stack>
         </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
+        <DialogContent dividers sx={{ pt: 2, px: { xs: 1.5, sm: 3 } }}>
+          {saveEmployee.error && <Alert severity="error" sx={{ mb: 2 }}>{saveEmployee.error.message}</Alert>}
           <Grid2 container spacing={2}>
             <Grid2 size={{ xs: 12, md: 8 }}>
               <Paper variant="outlined" sx={{ boxShadow: "none" }}>
-                <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value)} sx={{ px: 1.5, borderBottom: 1, borderColor: "divider" }}>
+                <Tabs
+                  value={activeTab}
+                  onChange={(_, value) => setActiveTab(value)}
+                  variant="scrollable"
+                  scrollButtons="auto"
+                  sx={{ px: 1.5, borderBottom: 1, borderColor: "divider" }}
+                >
                   <Tab value="basic" label="Informacion basica" />
                   <Tab value="access" label="Nivel de acceso" />
                   <Tab value="schedule" label="Horario" />
@@ -629,7 +726,7 @@ export function EmployeeManagementPage() {
                     <Chip icon={<CreditCardIcon />} label={form.card_number ? "Tarjeta 1" : "Tarjeta 0"} variant="outlined" />
                     <Chip icon={<FingerprintIcon />} label={`Huellas ${editing?.fingerprint_count ?? 0}`} variant="outlined" />
                   </Stack>
-                  <Button variant="outlined" onClick={() => setCredentialOpen(true)}>
+                  <Button variant="outlined" onClick={openCredentialDrawer} disabled={!open}>
                     Administracion de credencial
                   </Button>
                   <Alert severity="warning" variant="outlined">
@@ -640,24 +737,41 @@ export function EmployeeManagementPage() {
             </Grid2>
           </Grid2>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancelar</Button>
-          <Button variant={editing ? "contained" : "outlined"} onClick={() => { setKeepAdding(false); saveEmployee.mutate(); }} disabled={saveEmployee.isPending}>
+        <DialogActions sx={{ px: { xs: 1.5, sm: 3 }, py: 1.5, flexWrap: "wrap", gap: 1, "& > :not(style) ~ :not(style)": { ml: 0 } }}>
+          <Button onClick={closeEmployeeEditor} disabled={saveEmployee.isPending} sx={{ width: { xs: "100%", sm: "auto" } }}>Cancelar</Button>
+          <Button
+            variant={editing ? "contained" : "outlined"}
+            onClick={() => saveEmployee.mutate({ continueAdding: false })}
+            disabled={saveEmployee.isPending}
+            sx={{ width: { xs: "100%", sm: "auto" } }}
+          >
             {editing ? "Guardar" : "Anadir"}
           </Button>
           {!editing && (
-            <Button variant="contained" onClick={() => { setKeepAdding(true); saveEmployee.mutate(); }} disabled={saveEmployee.isPending}>
+            <Button
+              variant="contained"
+              onClick={() => saveEmployee.mutate({ continueAdding: true })}
+              disabled={saveEmployee.isPending}
+              sx={{ width: { xs: "100%", sm: "auto" } }}
+            >
               Anadir y continuar
             </Button>
           )}
         </DialogActions>
       </Dialog>
 
-      <Drawer anchor="right" open={credentialOpen} onClose={() => setCredentialOpen(false)} PaperProps={{ sx: { width: { xs: "100%", sm: 430 }, p: 2 } }}>
+      <Drawer
+        anchor="right"
+        open={open && credentialOpen}
+        onClose={closeCredentialDrawer}
+        ModalProps={{ keepMounted: false }}
+        sx={{ zIndex: (currentTheme) => currentTheme.zIndex.modal + 1 }}
+        PaperProps={{ sx: { width: { xs: "100%", sm: 430 }, p: { xs: 1.5, sm: 2 }, overflowY: "auto" } }}
+      >
         <Stack spacing={2}>
           <Stack direction="row" alignItems="center" justifyContent="space-between">
             <Typography variant="h6">Administracion de credencial</Typography>
-            <IconButton onClick={() => setCredentialOpen(false)}><CloseIcon /></IconButton>
+            <IconButton onClick={closeCredentialDrawer} aria-label="cerrar credenciales"><CloseIcon /></IconButton>
           </Stack>
           <Divider />
           <Stack spacing={1}>
@@ -668,19 +782,44 @@ export function EmployeeManagementPage() {
           <Divider />
           <Stack spacing={1}>
             <Typography variant="subtitle1">Huella dactilar</Typography>
-            <TextField select label="Dispositivo de enrolamiento" value={fingerDeviceId} onChange={(event) => setFingerDeviceId(event.target.value)} fullWidth>
+            {!form.id && <Alert severity="warning">Guarda la persona antes de capturar huella</Alert>}
+            {form.id && fingerprintDeviceOptions.length === 0 && (
+              <Alert severity="warning">Asigna y guarda al menos un dispositivo antes de capturar huella.</Alert>
+            )}
+            <TextField
+              select
+              label="Dispositivo de enrolamiento"
+              value={fingerDeviceId}
+              onChange={(event) => setFingerDeviceId(event.target.value)}
+              fullWidth
+              disabled={!form.id || fingerprintDeviceOptions.length === 0}
+              SelectProps={{ MenuProps: { sx: { zIndex: (currentTheme) => currentTheme.zIndex.modal + 2 } } }}
+            >
               <MenuItem value="">Selecciona dispositivo</MenuItem>
-              {deviceOptions.map((device) => <MenuItem key={device.id} value={device.id}>{device.name} ({device.status})</MenuItem>)}
+              {fingerprintDeviceOptions.map((device) => <MenuItem key={device.id} value={device.id}>{device.name} ({device.status})</MenuItem>)}
             </TextField>
-            <TextField select label="Dedo" value={fingerNo} onChange={(event) => setFingerNo(Number(event.target.value))} fullWidth>
+            <TextField
+              select
+              label="Dedo"
+              value={fingerNo}
+              onChange={(event) => setFingerNo(Number(event.target.value))}
+              fullWidth
+              SelectProps={{ MenuProps: { sx: { zIndex: (currentTheme) => currentTheme.zIndex.modal + 2 } } }}
+            >
               {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => (
                 <MenuItem key={value} value={value}>Huella {value}</MenuItem>
               ))}
             </TextField>
-            <Button variant="contained" startIcon={<FingerprintIcon />} onClick={() => enrollFingerprint.mutate()} disabled={enrollFingerprint.isPending || !form.id}>
+            <Button
+              variant="contained"
+              startIcon={<FingerprintIcon />}
+              onClick={() => enrollFingerprint.mutate()}
+              disabled={enrollFingerprint.isPending || !form.id || !fingerDeviceId}
+            >
               Capturar huella en dispositivo
             </Button>
             {enrollFingerprint.error && <Alert severity="error">{enrollFingerprint.error.message}</Alert>}
+            {enrollFingerprint.isSuccess && <Alert severity="success">Solicitud de captura encolada.</Alert>}
             <Alert severity="info" variant="outlined">
               El dispositivo debe iniciar la captura. La plantilla no se muestra ni se guarda en el frontend.
             </Alert>
@@ -688,7 +827,45 @@ export function EmployeeManagementPage() {
         </Stack>
       </Drawer>
 
-      <Dialog open={syncOpen} onClose={() => setSyncOpen(false)} fullWidth maxWidth="sm">
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => { if (!deleteEmployee.isPending) { setDeleteTarget(null); deleteEmployee.reset(); } }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Eliminar persona</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Typography>
+              ¿Seguro que deseas eliminar a <strong>{deleteTarget?.full_name}</strong>?
+            </Typography>
+            <Alert severity="warning">
+              La persona se eliminará de Supabase y se encolará un comando <code>delete_person</code> para cada dispositivo asignado
+              ({deleteTarget ? (assignmentsByEmployee[deleteTarget.id] ?? []).length : 0}). Esta acción no se puede deshacer desde la interfaz.
+            </Alert>
+            {deleteEmployee.error && <Alert severity="error">{deleteEmployee.error.message}</Alert>}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setDeleteTarget(null); deleteEmployee.reset(); }} disabled={deleteEmployee.isPending}>Cancelar</Button>
+          <Button
+            color="error"
+            variant="contained"
+            startIcon={<DeleteIcon />}
+            disabled={!deleteTarget || deleteEmployee.isPending}
+            onClick={() => { if (deleteTarget) deleteEmployee.mutate(deleteTarget); }}
+          >
+            Eliminar persona
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={syncOpen}
+        onClose={() => { setSyncOpen(false); setSyncDeviceId(""); syncPeople.reset(); }}
+        fullWidth
+        maxWidth="sm"
+      >
         <DialogTitle>Sincronizar empleados desde dispositivo</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5} sx={{ pt: 1 }}>
@@ -703,7 +880,7 @@ export function EmployeeManagementPage() {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSyncOpen(false)}>Cancelar</Button>
+          <Button onClick={() => { setSyncOpen(false); setSyncDeviceId(""); syncPeople.reset(); }}>Cancelar</Button>
           <Button variant="contained" startIcon={<PersonSearchIcon />} disabled={!syncDeviceId || syncPeople.isPending} onClick={() => syncPeople.mutate()}>
             Sincronizar
           </Button>

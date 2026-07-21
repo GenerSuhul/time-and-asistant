@@ -41,9 +41,19 @@ Deno.serve(async (req) => {
       return jsonResponse({ command }, 202);
     }
     if (input.action === "delete") {
+      const { data: links, error: linksError } = await supabase.from("employee_devices")
+        .select("device_id,devices:device_id(name,status)").eq("employee_id", input.id);
+      if (linksError) throw linksError;
       const { error } = await supabase.rpc("admin_delete_employee", { p_employee_id: input.id, p_requested_by: actor.user_id });
       if (error) throw error;
-      return jsonResponse({ ok: true });
+      return jsonResponse({
+        ok: true,
+        queued_devices: (links ?? []).map((link: any) => ({
+          id: link.device_id,
+          name: relation(link.devices)?.name ?? link.device_id,
+          status: relation(link.devices)?.status ?? "unknown"
+        }))
+      });
     }
     if (input.action === "sync_all_device_people") {
       const { data: devices, error } = await supabase.from("devices").select("id").not("dev_index", "is", null);
@@ -54,12 +64,21 @@ Deno.serve(async (req) => {
     }
     if (input.action === "enroll_fingerprint") {
       const { data: link, error: linkError } = await supabase.from("employee_devices")
-        .select("external_person_id").eq("employee_id", input.employee_id).eq("device_id", input.device_id).maybeSingle();
+        .select("external_person_id,devices:device_id(name,status,dev_index)")
+        .eq("employee_id", input.employee_id).eq("device_id", input.device_id).maybeSingle();
       if (linkError) throw linkError;
-      if (!link?.external_person_id) throw new Error("Employee must be synchronized to the selected device first");
+      if (!link?.external_person_id) throw new Error("Guarda y sincroniza la persona con el dispositivo antes de capturar huella");
+      const device = relation(link.devices);
+      if (!device?.dev_index) throw new Error("El dispositivo seleccionado no está enlazado con DeviceGateway");
+      const { data: activeSession, error: activeSessionError } = await supabase.from("biometric_enrollment_sessions")
+        .select("id,status").eq("employee_id", input.employee_id).eq("device_id", input.device_id)
+        .eq("finger_no", input.finger_no).in("status", ["pending", "processing"]).maybeSingle();
+      if (activeSessionError) throw activeSessionError;
+      if (activeSession) throw new Error("Ya existe una captura pendiente para esta persona, dispositivo y dedo");
       const { data: session, error: sessionError } = await supabase.from("biometric_enrollment_sessions").insert({
         employee_id: input.employee_id, device_id: input.device_id, finger_no: input.finger_no, requested_by: actor.user_id
       }).select("*").single();
+      if (sessionError?.code === "23505") throw new Error("Ya existe una captura pendiente para esta persona, dispositivo y dedo");
       if (sessionError) throw sessionError;
       const { error: commandError } = await supabase.from("device_commands").insert({
         device_id: input.device_id, employee_id: input.employee_id, command_type: "enroll_fingerprint", requested_by: actor.user_id,
@@ -111,4 +130,8 @@ function sanitizeMetadataValue(value: unknown): unknown {
     .map(([key, item]) => [key, sanitizeMetadataValue(item)]));
   if (typeof value === "string") return value.slice(0, 1000);
   return value;
+}
+
+function relation(value: any) {
+  return Array.isArray(value) ? value[0] : value;
 }
