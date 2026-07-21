@@ -4,7 +4,9 @@ import { createClient } from "../../services/device-gateway/node_modules/@supaba
 process.loadEnvFile(process.env.GATEWAY_ENV_FILE ?? "/opt/hikvision-attendance/services/device-gateway/.env");
 
 const date = process.argv[2];
-if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) throw new Error("Usage: node scripts/ops/measure-attendance-latency.mjs YYYY-MM-DD");
+const force = process.argv[3] !== "--normal";
+const cacheOnly = process.argv[3] === "--cache-only";
+if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) throw new Error("Usage: node scripts/ops/measure-attendance-latency.mjs YYYY-MM-DD [--normal|--cache-only]");
 const anonKey = process.env.SUPABASE_ANON_KEY;
 if (!anonKey) throw new Error("SUPABASE_ANON_KEY is required");
 
@@ -67,10 +69,23 @@ const { count: jobsAfterReport, error: jobsAfterError } = await admin.from("atte
   .select("id", { count: "exact", head: true });
 if (jobsAfterError) throw jobsAfterError;
 
+if (cacheOnly) {
+  console.log(JSON.stringify({
+    date,
+    cached_report_round_trip_ms: cachedReportRoundTripMs,
+    cached_report_rows: beforeReport?.rows?.length ?? 0,
+    report_read_created_jobs: jobsAfterReport !== jobsBeforeReport
+  }, null, 2));
+  await frontend.removeChannel(channel);
+  frontend.realtime.disconnect();
+  admin.realtime.disconnect();
+  process.exit(0);
+}
+
 const clientClickedAt = new Date().toISOString();
 const enqueueStart = performance.now();
 const { data: enqueue, error: enqueueError } = await frontend.functions.invoke("attendance-sync", {
-  body: { action: "enqueue_day", date, force: true, trace_id: traceId, client_clicked_at: clientClickedAt }
+  body: { action: "enqueue_day", date, force, trace_id: traceId, client_clicked_at: clientClickedAt }
 });
 if (enqueueError) throw enqueueError;
 const enqueueRoundTripMs = Math.round(performance.now() - enqueueStart);
@@ -79,7 +94,7 @@ if (!jobId) throw new Error("The enqueue response did not include a job id");
 
 const duplicateStart = performance.now();
 const { data: duplicate, error: duplicateError } = await frontend.functions.invoke("attendance-sync", {
-  body: { action: "enqueue_day", date, force: true, trace_id: crypto.randomUUID(), client_clicked_at: new Date().toISOString() }
+  body: { action: "enqueue_day", date, force, trace_id: crypto.randomUUID(), client_clicked_at: new Date().toISOString() }
 });
 if (duplicateError) throw duplicateError;
 const duplicateRoundTripMs = Math.round(performance.now() - duplicateStart);
@@ -95,6 +110,7 @@ const finalReportRoundTripMs = Math.round(performance.now() - finalReportStart);
 await frontend.removeChannel(channel);
 const metrics = {
   date,
+  force,
   trace_id: traceId,
   job_id: jobId,
   response: {
