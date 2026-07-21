@@ -7,6 +7,7 @@ import { startEventQueueWorker } from "./workers/event-queue-worker.js";
 import { startHistorySyncWorker } from "./workers/history-sync-worker.js";
 import { supabase } from "./supabase.js";
 import { startDeviceRegistrationWorker } from "./workers/device-registration-worker.js";
+import { startAttendanceSyncJobWorker } from "./workers/attendance-sync-job-worker.js";
 
 async function main() {
   const app = Fastify({ logger: false });
@@ -24,6 +25,7 @@ async function main() {
   startCommandWorker();
   startHistorySyncWorker();
   startDeviceRegistrationWorker();
+  startAttendanceSyncJobWorker();
   const updateConnectivity = () => supabase.rpc("mark_stale_devices_offline").then(({ error }) => {
     if (error) logger.error({ err: error }, "Device connectivity sweep failed");
   });

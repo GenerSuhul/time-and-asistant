@@ -3,12 +3,26 @@ import { createAdapter } from "../adapters/factory.js";
 import type { DeviceRecord } from "../adapters/DeviceAdapter.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { processGatewayEvent } from "../services/event-ingestion.js";
+import { processHistoricalEventBatch } from "../services/event-ingestion.js";
 import { supabase } from "../supabase.js";
 
 let running = false;
 
 type SyncTrigger = "scheduled" | "reconnect" | "api" | "command";
+
+export type HistorySyncProgress = {
+  type: "device_started" | "gateway_page" | "events_upserted" | "device_completed";
+  at: string;
+  device_id: string;
+  device_index: number;
+  devices_total: number;
+  page?: number;
+  position?: number;
+  records?: number;
+  phase?: "request" | "received";
+  is_last?: boolean;
+  result?: HistorySyncSummary;
+};
 
 export type HistorySyncSummary = {
   devices_scanned: number;
@@ -45,16 +59,31 @@ export async function syncDeviceHistoryRange(input: {
   to: Date;
   deviceIds?: string[];
   trigger?: SyncTrigger;
+  traceId?: string;
+  concurrency?: number;
+  onProgress?: (progress: HistorySyncProgress) => void | Promise<void>;
 }): Promise<HistorySyncSummary> {
   if (!Number.isFinite(input.from.valueOf()) || !Number.isFinite(input.to.valueOf()) || input.from > input.to) {
     throw new Error("A valid history range is required");
   }
   const devices = await loadDevices(input.deviceIds);
   const summary = emptySummary();
-  for (const device of devices) {
-    const result = await syncOneDevice(device, input.from, input.to, input.trigger ?? "api");
-    mergeSummary(summary, result);
-  }
+  let nextDevice = 0;
+  const worker = async () => {
+    while (nextDevice < devices.length) {
+      const deviceIndex = nextDevice++;
+      const device = devices[deviceIndex];
+      const result = await syncOneDevice(device, input.from, input.to, input.trigger ?? "api", {
+        traceId: input.traceId,
+        deviceIndex,
+        devicesTotal: devices.length,
+        onProgress: input.onProgress
+      });
+      mergeSummary(summary, result);
+    }
+  };
+  const concurrency = Math.max(1, Math.min(input.concurrency ?? 2, devices.length || 1));
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
   return summary;
 }
 
@@ -64,8 +93,12 @@ export async function syncDeviceHistory(deviceId?: string) {
   for (const device of devices) {
     const { data: state } = await supabase.from("device_sync_state")
       .select("last_successful_event_at").eq("device_id", device.id).maybeSingle();
-    const from = state?.last_successful_event_at ? new Date(state.last_successful_event_at) : lookbackStart();
-    const result = await syncOneDevice(device, from, new Date(), deviceId ? "reconnect" : "scheduled");
+    const now = new Date();
+    const candidate = state?.last_successful_event_at ? new Date(state.last_successful_event_at) : lookbackStart();
+    const from = candidate <= now ? candidate : lookbackStart();
+    const result = await syncOneDevice(device, from, now, deviceId ? "reconnect" : "scheduled", {
+      deviceIndex: 0, devicesTotal: devices.length
+    });
     mergeSummary(summary, result);
   }
   return summary;
@@ -85,7 +118,13 @@ async function syncOneDevice(
   device: DeviceRecord,
   from: Date,
   to: Date,
-  trigger: SyncTrigger
+  trigger: SyncTrigger,
+  context: {
+    traceId?: string;
+    deviceIndex: number;
+    devicesTotal: number;
+    onProgress?: (progress: HistorySyncProgress) => void | Promise<void>;
+  }
 ): Promise<HistorySyncSummary> {
   const startedAt = new Date();
   const result = emptySummary();
@@ -93,6 +132,12 @@ async function syncOneDevice(
   let status: "success" | "partial" | "failed" = "success";
   let errorMessage: string | null = null;
   let eventErrors = 0;
+  const timings: Record<string, string> = { started_at: startedAt.toISOString() };
+
+  await context.onProgress?.({
+    type: "device_started", at: startedAt.toISOString(), device_id: device.id,
+    device_index: context.deviceIndex, devices_total: context.devicesTotal
+  });
 
   await supabase.from("device_sync_state").upsert({
     device_id: device.id,
@@ -105,30 +150,42 @@ async function syncOneDevice(
   try {
     adapter = createAdapter(device);
     await adapter.connect();
-    const events = await adapter.fetchHistoricalEvents({ from, to });
+    const events = await adapter.fetchHistoricalEvents({
+      from, to, traceId: context.traceId,
+      onPage: async (page) => {
+        if (page.phase === "request" && page.page === 1) timings.first_gateway_request_at = page.at;
+        if (page.phase === "received" && page.page === 1) timings.first_gateway_page_at = page.at;
+        if (page.phase === "received" && page.isLast) timings.last_gateway_page_at = page.at;
+        await context.onProgress?.({
+          type: "gateway_page", at: page.at, device_id: device.id,
+          device_index: context.deviceIndex, devices_total: context.devicesTotal,
+          page: page.page, position: page.position, records: page.records,
+          phase: page.phase, is_last: page.isLast
+        });
+      }
+    });
     result.events_found = events.length;
 
-    for (const event of events) {
-      if (!isAttendanceCandidate(event)) {
-        result.events_skipped += 1;
-        continue;
-      }
+    const candidates = events.filter(isAttendanceCandidate);
+    result.events_skipped += events.length - candidates.length;
+    for (let index = 0; index < candidates.length; index += 200) {
+      const batch = candidates.slice(index, index + 200);
       try {
-        const ingested = await processGatewayEvent(event, {
-          source: "offline",
-          skipQueue: true,
-          recalculateAttendance: false,
-          updateCursor: false
-        });
-        if (ingested.inserted) result.events_inserted += 1;
-        else if (ingested.updated) result.events_updated += 1;
-        else result.events_skipped += 1;
+        const ingested = await processHistoricalEventBatch(batch);
+        result.events_inserted += ingested.inserted;
+        result.events_updated += ingested.updated;
+        result.events_skipped += ingested.skipped;
       } catch (error) {
-        eventErrors += 1;
+        eventErrors += batch.length;
         status = "partial";
-        logger.warn({ err: error, deviceId: device.id }, "Historical attendance event failed");
+        logger.warn({ err: error, deviceId: device.id, batchSize: batch.length }, "Historical attendance batch failed");
       }
     }
+    timings.events_upserted_at = new Date().toISOString();
+    await context.onProgress?.({
+      type: "events_upserted", at: timings.events_upserted_at, device_id: device.id,
+      device_index: context.deviceIndex, devices_total: context.devicesTotal
+    });
     if (eventErrors > 0) errorMessage = `${eventErrors} event(s) failed normalization or storage`;
   } catch (error) {
     status = "failed";
@@ -151,7 +208,7 @@ async function syncOneDevice(
     events_duplicated: result.events_skipped,
     status,
     error_message: errorMessage,
-    metadata: { trigger, events_updated: result.events_updated, event_errors: eventErrors }
+    metadata: { trigger, trace_id: context.traceId, timings, events_updated: result.events_updated, event_errors: eventErrors }
   });
 
   await supabase.from("device_sync_state").upsert({
@@ -175,6 +232,10 @@ async function syncOneDevice(
     device_id: device.id,
     device_identifier: device.device_identifier ?? null,
     error: errorMessage
+  });
+  await context.onProgress?.({
+    type: "device_completed", at: new Date().toISOString(), device_id: device.id,
+    device_index: context.deviceIndex, devices_total: context.devicesTotal, result
   });
   return result;
 }

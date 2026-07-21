@@ -270,6 +270,158 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
   }
 }
 
+export async function processHistoricalEventBatch(inputs: unknown[]) {
+  if (inputs.length === 0) return { inserted: 0, updated: 0, skipped: 0 };
+  const parsedEvents = inputs.map((input) =>
+    sanitizeGatewayPayload(gatewayEventPayloadSchema.parse(normalizeIncomingDate(input))));
+  const device = await findDevice(parsedEvents[0]);
+  const employeeNos = [...new Set(parsedEvents.map((event) => event.employee_external_id).filter(Boolean))] as string[];
+  const employeeByNo = new Map<string, EmployeeRow>();
+  if (employeeNos.length > 0) {
+    const companyId = device.company_id ?? null;
+    const [linksResult, externalResult, codeResult] = await Promise.all([
+      supabase.from("employee_devices")
+        .select("external_person_id,employees:employee_id(id,branch_id,company_id,employee_code,full_name)")
+        .eq("device_id", device.id).in("external_person_id", employeeNos),
+      companyId
+        ? supabase.from("employees").select("id,branch_id,company_id,employee_code,full_name,external_employee_id")
+            .eq("company_id", companyId).in("external_employee_id", employeeNos)
+        : Promise.resolve({ data: [], error: null }),
+      companyId
+        ? supabase.from("employees").select("id,branch_id,company_id,employee_code,full_name")
+            .eq("company_id", companyId).in("employee_code", employeeNos)
+        : Promise.resolve({ data: [], error: null })
+    ]);
+    for (const result of [linksResult, externalResult, codeResult]) if (result.error) throw result.error;
+    for (const link of linksResult.data ?? []) {
+      const employee = Array.isArray(link.employees) ? link.employees[0] : link.employees;
+      if (employee?.id) employeeByNo.set(link.external_person_id, employee as EmployeeRow);
+    }
+    for (const employee of externalResult.data ?? []) {
+      if (!employeeByNo.has(employee.external_employee_id)) employeeByNo.set(employee.external_employee_id, employee as EmployeeRow);
+    }
+    for (const employee of codeResult.data ?? []) {
+      if (!employeeByNo.has(employee.employee_code)) employeeByNo.set(employee.employee_code, employee as EmployeeRow);
+    }
+  }
+
+  const prepared = new Map<string, { payload: GatewayEventPayload; employee: EmployeeRow | null; hash: string }>();
+  for (const payload of parsedEvents) {
+    const hash = eventHash(device.id, payload);
+    if (!prepared.has(hash)) prepared.set(hash, {
+      payload,
+      employee: payload.employee_external_id ? employeeByNo.get(payload.employee_external_id) ?? null : null,
+      hash
+    });
+  }
+  const items = [...prepared.values()];
+  const hashes = items.map((item) => item.hash);
+  const existingAttendance = new Map<string, any>();
+  for (const hashChunk of chunks(hashes, 100)) {
+    const { data, error } = await supabase.from("attendance_events").select("*").in("unique_key", hashChunk);
+    if (error) throw error;
+    for (const row of data ?? []) existingAttendance.set(row.unique_key, row);
+  }
+
+  const rawByHash = new Map<string, any>();
+  for (const itemChunk of chunks(items, 100)) {
+    const rawRows = itemChunk.map(({ payload, employee, hash }) => ({
+      device_id: device.id,
+      branch_id: device.branch_id,
+      external_event_id: payload.external_event_id ?? null,
+      employee_external_id: payload.employee_external_id ?? null,
+      employee_id: employee?.id ?? null,
+      occurred_at: payload.occurred_at,
+      raw_event_type: payload.raw_event_type,
+      raw_payload: payload.payload ?? {},
+      auth_method: payload.auth_method ?? "unknown",
+      access_result: payload.access_result ?? "unknown",
+      event_hash: hash
+    }));
+    const { data, error } = await supabase.from("raw_access_events")
+      .upsert(rawRows, { onConflict: "event_hash" }).select("id,event_hash");
+    if (error) throw error;
+    for (const row of data ?? []) rawByHash.set(row.event_hash, row);
+  }
+
+  const newRows: any[] = [];
+  const updateRows: any[] = [];
+  for (const { payload, employee, hash } of items) {
+    const rawEvent = rawByHash.get(hash);
+    if (!rawEvent) throw new Error("Historical raw event upsert did not return an id");
+    const local = guatemalaDateTime(payload.occurred_at);
+    const eventType = normalizeEventType(payload.raw_event_type, payload.payload);
+    const now = new Date().toISOString();
+    const normalized = {
+      raw_event_id: rawEvent.id,
+      employee_id: employee?.id ?? null,
+      company_id: device.company_id ?? null,
+      branch_id: device.branch_id,
+      device_id: device.id,
+      device_identifier: device.device_identifier ?? device.serial_number,
+      dev_index: optionalText(device.dev_index),
+      employee_no: payload.employee_external_id ?? null,
+      employee_code: employee?.employee_code ?? null,
+      person_name: optionalText(payload.payload?.name ?? payload.payload?.personName ?? payload.payload?.person_name) ?? employee?.full_name ?? null,
+      event_type: eventType,
+      occurred_at: payload.occurred_at,
+      event_time_utc: payload.occurred_at,
+      event_time_local: local.dateTime,
+      event_date_local: local.date,
+      source: "offline",
+      raw_event_type: payload.raw_event_type,
+      major: optionalInteger(payload.payload?.major),
+      minor: optionalInteger(payload.payload?.minor),
+      attendance_status: optionalText(payload.payload?.attendanceStatus ?? payload.payload?.attendance_status),
+      raw_payload: payload.payload ?? {},
+      synced_at: now,
+      callback_received_at: null,
+      ingested_at: now,
+      source_seen: ["offline"],
+      unique_key: hash,
+      confidence: eventType === "unknown" ? 0.4 : 1
+    };
+    const existing = existingAttendance.get(hash);
+    if (!existing) {
+      newRows.push(normalized);
+      continue;
+    }
+    const sourceSeen = new Set<string>(existing.source_seen ?? [existing.source]);
+    const observedOffline = !sourceSeen.has("offline");
+    sourceSeen.add("offline");
+    const resolvedEmployee = !existing.employee_id && Boolean(employee?.id);
+    if (observedOffline || resolvedEmployee) {
+      updateRows.push({
+        ...existing,
+        ...(resolvedEmployee ? normalized : {}),
+        id: existing.id,
+        raw_event_id: existing.raw_event_id ?? normalized.raw_event_id,
+        source: existing.source === "realtime" ? "realtime" : "offline",
+        source_seen: [...sourceSeen],
+        callback_received_at: existing.callback_received_at,
+        ingested_at: existing.ingested_at,
+        synced_at: now,
+        unique_key: hash
+      });
+    }
+  }
+
+  let inserted = 0;
+  for (const rowChunk of chunks(newRows, 100)) {
+    const { data, error } = await supabase.from("attendance_events")
+      .upsert(rowChunk, { onConflict: "unique_key", ignoreDuplicates: true }).select("id");
+    if (error) throw error;
+    inserted += data?.length ?? 0;
+  }
+  for (const rowChunk of chunks(updateRows, 100)) {
+    const { error } = await supabase.from("attendance_events")
+      .upsert(rowChunk, { onConflict: "unique_key" });
+    if (error) throw error;
+  }
+  const updated = updateRows.length;
+  return { inserted, updated, skipped: inputs.length - inserted - updated };
+}
+
 function guatemalaDateTime(value: string) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Guatemala", year: "numeric", month: "2-digit", day: "2-digit",
@@ -374,4 +526,10 @@ function sanitizeObject(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .filter(([key]) => !/finger|face|photo|picture|image|template|password|secret|ehomekey/i.test(key))
     .map(([key, item]) => [key, sanitizeObject(item)]));
+}
+
+function chunks<T>(values: T[], size: number) {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
 }

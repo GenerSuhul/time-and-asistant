@@ -6,6 +6,7 @@ import { requireRole } from "../_shared/auth.ts";
 
 const schema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  company_id: z.string().uuid().optional(),
   branch_id: z.string().uuid().optional(),
   employee_id: z.string().uuid().optional()
 });

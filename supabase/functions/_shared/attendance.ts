@@ -75,75 +75,71 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
   const { data: employees, error: employeesError } = await employeesQuery;
   if (employeesError) throw employeesError;
 
-  const processed: string[] = [];
-  const dateEnd = nextDate(params.date);
+  const employeeRows = employees ?? [];
+  if (employeeRows.length === 0) return { processed_count: 0, employee_ids: [] };
 
-  for (const employee of employees ?? []) {
-    const { data: schedule } = await supabase
-      .from("work_schedules")
-      .select("id, default_check_in, default_lunch_out, default_lunch_in, default_check_out, tolerance_minutes")
-      .eq("attendance_group_id", employee.attendance_group_id)
-      .eq("is_active", true)
-      .maybeSingle();
+  const employeeIds = employeeRows.map((employee: any) => employee.id as string);
+  const groupIds = [...new Set(employeeRows.map((employee: any) => employee.attendance_group_id).filter(Boolean))];
+  const companyIds = [...new Set(employeeRows.map((employee: any) => employee.company_id).filter(Boolean))];
 
-    const { data: scheduleRule } = schedule?.id
-      ? await supabase
-          .from("schedule_rules")
-          .select("is_workday, expected_check_in, lunch_out, lunch_in, expected_check_out, tolerance_minutes")
-          .eq("schedule_id", schedule.id)
-          .eq("day_of_week", dayOfWeek(params.date))
-          .maybeSingle()
-      : { data: null };
+  const schedulesRequest = groupIds.length
+    ? supabase.from("work_schedules")
+        .select("id,attendance_group_id,default_check_in,default_check_out,tolerance_minutes")
+        .in("attendance_group_id", groupIds).eq("is_active", true)
+    : Promise.resolve({ data: [], error: null });
+  const eventsRequest = supabase.from("attendance_events")
+    .select("employee_id,event_type,occurred_at,source,device_id")
+    .in("employee_id", employeeIds).eq("event_date_local", params.date)
+    .order("occurred_at", { ascending: true });
+  const adjustmentsRequest = supabase.from("manual_adjustments")
+    .select("employee_id,event_type,occurred_at")
+    .in("employee_id", employeeIds).eq("attendance_date", params.date).eq("status", "approved")
+    .order("occurred_at", { ascending: true });
+  const holidaysRequest = companyIds.length
+    ? supabase.from("holidays").select("id,company_id,branch_id")
+        .in("company_id", companyIds).eq("holiday_date", params.date)
+    : Promise.resolve({ data: [], error: null });
+  const leavesRequest = supabase.from("leave_requests").select("id,employee_id")
+    .in("employee_id", employeeIds).eq("status", "approved")
+    .lte("start_date", params.date).gte("end_date", params.date);
 
+  const [schedulesResult, eventsResult, adjustmentsResult, holidaysResult, leavesResult] = await Promise.all([
+    schedulesRequest, eventsRequest, adjustmentsRequest, holidaysRequest, leavesRequest
+  ]);
+  for (const result of [schedulesResult, eventsResult, adjustmentsResult, holidaysResult, leavesResult]) {
+    if (result.error) throw result.error;
+  }
+
+  const schedules = schedulesResult.data ?? [];
+  const scheduleIds = schedules.map((schedule: any) => schedule.id as string);
+  const rulesResult = scheduleIds.length
+    ? await supabase.from("schedule_rules")
+        .select("schedule_id,is_workday,expected_check_in,expected_check_out,tolerance_minutes")
+        .in("schedule_id", scheduleIds).eq("day_of_week", dayOfWeek(params.date))
+    : { data: [], error: null };
+  if (rulesResult.error) throw rulesResult.error;
+
+  const scheduleByGroup = new Map(schedules.map((schedule: any) => [schedule.attendance_group_id, schedule]));
+  const ruleBySchedule = new Map((rulesResult.data ?? []).map((rule: any) => [rule.schedule_id, rule]));
+  const eventsByEmployee = groupByEmployee(eventsResult.data ?? []);
+  const adjustmentsByEmployee = groupByEmployee(adjustmentsResult.data ?? []);
+  const leaveEmployeeIds = new Set((leavesResult.data ?? []).map((leave: any) => leave.employee_id));
+  const holidays = holidaysResult.data ?? [];
+  const dailyRows = [];
+
+  for (const employee of employeeRows) {
+    const schedule: any = scheduleByGroup.get(employee.attendance_group_id);
+    const scheduleRule: any = schedule?.id ? ruleBySchedule.get(schedule.id) : null;
     const expectedCheckIn = scheduleRule?.expected_check_in ?? schedule?.default_check_in ?? null;
-    const expectedLunchOut = scheduleRule?.lunch_out ?? schedule?.default_lunch_out ?? null;
-    const expectedLunchIn = scheduleRule?.lunch_in ?? schedule?.default_lunch_in ?? null;
     const expectedCheckOut = scheduleRule?.expected_check_out ?? schedule?.default_check_out ?? null;
     const tolerance = scheduleRule?.tolerance_minutes ?? schedule?.tolerance_minutes ?? 5;
     const isWorkday = scheduleRule?.is_workday ?? Boolean(schedule);
-
-    const holidayRequest = supabase
-      .from("holidays")
-      .select("id")
-      .eq("holiday_date", params.date)
-      .limit(1)
-      .maybeSingle();
-
-    const scopedHolidayRequest = employee.branch_id
-      ? holidayRequest.or(`branch_id.is.null,branch_id.eq.${employee.branch_id}`)
-      : holidayRequest.is("branch_id", null);
-
-    const [{ data: deviceEvents }, { data: manualAdjustments }, { data: holiday }, { data: leave }] =
-      await Promise.all([
-        supabase
-          .from("attendance_events")
-          .select("event_type, occurred_at, source, device_id")
-          .eq("employee_id", employee.id)
-          .gte("occurred_at", `${params.date}T00:00:00${GUATEMALA_OFFSET}`)
-          .lt("occurred_at", `${dateEnd}T00:00:00${GUATEMALA_OFFSET}`)
-          .order("occurred_at", { ascending: true }),
-        supabase
-          .from("manual_adjustments")
-          .select("event_type, occurred_at")
-          .eq("employee_id", employee.id)
-          .eq("attendance_date", params.date)
-          .eq("status", "approved")
-          .order("occurred_at", { ascending: true }),
-        scopedHolidayRequest,
-        supabase
-          .from("leave_requests")
-          .select("id")
-          .eq("employee_id", employee.id)
-          .eq("status", "approved")
-          .lte("start_date", params.date)
-          .gte("end_date", params.date)
-          .limit(1)
-          .maybeSingle()
-      ]);
-
+    const holiday = holidays.some((item: any) => item.company_id === employee.company_id &&
+      (item.branch_id === null || item.branch_id === employee.branch_id));
+    const leave = leaveEmployeeIds.has(employee.id);
     const events: EventRow[] = [
-      ...((deviceEvents ?? []) as EventRow[]),
-      ...((manualAdjustments ?? []).map((event) => ({ ...event, source: "manual" })) as EventRow[])
+      ...((eventsByEmployee.get(employee.id) ?? []) as EventRow[]),
+      ...((adjustmentsByEmployee.get(employee.id) ?? []).map((event: any) => ({ ...event, source: "manual" })) as EventRow[])
     ].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
 
     const actualCheckIn = firstByType(events, "check_in");
@@ -194,8 +190,7 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
     if (status === "complete" && lateMinutes > 0) status = "late";
     if (status === "complete" && earlyLeaveMinutes > 0) status = "early_leave";
 
-    const { error: upsertError } = await supabase.from("daily_attendance").upsert(
-      {
+    dailyRows.push({
         employee_id: employee.id,
         branch_id: employee.branch_id,
         attendance_date: params.date,
@@ -216,13 +211,21 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
         status,
         warnings,
         calculated_at: new Date().toISOString()
-      },
-      { onConflict: "employee_id,attendance_date" }
-    );
-
-    if (upsertError) throw upsertError;
-    processed.push(employee.id);
+      });
   }
 
-  return { processed_count: processed.length, employee_ids: processed };
+  const { error: upsertError } = await supabase.from("daily_attendance")
+    .upsert(dailyRows, { onConflict: "employee_id,attendance_date" });
+  if (upsertError) throw upsertError;
+  return { processed_count: employeeIds.length, employee_ids: employeeIds };
+}
+
+function groupByEmployee(rows: any[]) {
+  const grouped = new Map<string, any[]>();
+  for (const row of rows) {
+    const current = grouped.get(row.employee_id) ?? [];
+    current.push(row);
+    grouped.set(row.employee_id, current);
+  }
+  return grouped;
 }

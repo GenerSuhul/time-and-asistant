@@ -10,6 +10,13 @@ const common = {
   force: z.boolean().default(false)
 };
 const schema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("enqueue_day"),
+    date,
+    ...common,
+    trace_id: z.string().uuid().optional(),
+    client_clicked_at: z.string().datetime().optional()
+  }).strict(),
   z.object({ action: z.literal("sync_day"), date, ...common }).strict(),
   z.object({ action: z.literal("sync_range"), start_date: date, end_date: date, ...common }).strict(),
   z.object({
@@ -34,6 +41,7 @@ type DeviceScope = { global: boolean; companyIds: Set<string> };
 type ScopedDevice = { id: string; company_id: string | null };
 
 Deno.serve(async (req) => {
+  const edgeReceivedAt = new Date().toISOString();
   const options = handleOptions(req);
   if (options) return options;
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -52,6 +60,24 @@ Deno.serve(async (req) => {
     const devices = await scopedDevices(supabase, input.device_ids, scope);
     const from = `${startDate}T00:00:00-06:00`;
     const to = `${endDate}T23:59:59-06:00`;
+
+    if (input.action === "enqueue_day") {
+      const job = await enqueueAttendanceJob(supabase, {
+        date: input.date,
+        devices,
+        requestedBy: actor.user_id,
+        force: input.force,
+        traceId: input.trace_id,
+        clientClickedAt: input.client_clicked_at,
+        edgeReceivedAt
+      });
+      return jsonResponse({
+        ok: true,
+        state: job.status,
+        timezone: "America/Guatemala",
+        job
+      }, job.status === "complete" || job.status === "partial" ? 200 : 202);
+    }
 
     if (input.action === "sync_day_and_recalculate") {
       const commandIds = input.command_ids
@@ -132,6 +158,71 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: sanitizeError(message) }, status);
   }
 });
+
+async function enqueueAttendanceJob(supabase: any, input: {
+  date: string;
+  devices: ScopedDevice[];
+  requestedBy: string;
+  force: boolean;
+  traceId?: string;
+  clientClickedAt?: string;
+  edgeReceivedAt: string;
+}) {
+  const { data: active, error: activeError } = await supabase.from("attendance_sync_jobs")
+    .select("*")
+    .eq("date", input.date)
+    .eq("requested_by", input.requestedBy)
+    .in("status", ["pending", "processing", "calculating"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (activeError) throw activeError;
+  if (active) return { ...active, deduplicated: true };
+
+  if (!input.force) {
+    const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const { data: recent, error: recentError } = await supabase.from("attendance_sync_jobs")
+      .select("*")
+      .eq("date", input.date)
+      .eq("requested_by", input.requestedBy)
+      .in("status", ["complete", "partial"])
+      .gte("finished_at", cutoff)
+      .order("finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentError) throw recentError;
+    if (recent) return { ...recent, deduplicated: true, skipped_recent: true };
+  }
+
+  const deviceIds = input.devices.map((item) => item.id);
+  const companyIds = companyIdsForDevices(input.devices);
+  const { data, error } = await supabase.from("attendance_sync_jobs").insert({
+    date: input.date,
+    company_ids: companyIds,
+    device_ids: deviceIds,
+    requested_by: input.requestedBy,
+    force: input.force,
+    status: "pending",
+    stage: "queued",
+    progress: 0,
+    devices_total: deviceIds.length,
+    trace_id: input.traceId ?? crypto.randomUUID(),
+    client_clicked_at: input.clientClickedAt ?? null,
+    edge_received_at: input.edgeReceivedAt,
+    queued_at: new Date().toISOString(),
+    timing: { edge_received_at: input.edgeReceivedAt }
+  }).select("*").single();
+  if (error) throw error;
+  console.log(JSON.stringify({
+    event: "attendance_sync_job_queued",
+    trace_id: data.trace_id,
+    job_id: data.id,
+    edge_received_at: data.edge_received_at,
+    queued_at: data.queued_at,
+    devices_total: data.devices_total
+  }));
+  return { ...data, deduplicated: false };
+}
 
 async function actorScope(supabase: any, userId: string): Promise<DeviceScope> {
   const { data, error } = await supabase.from("user_roles")

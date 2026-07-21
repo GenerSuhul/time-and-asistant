@@ -92,13 +92,19 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
 
   async fetchHistoricalEvents(commandOrOptions: DeviceCommand | HistoryFetchOptions): Promise<GatewayEventPayload[]> {
     const range = "payload" in commandOrOptions ? commandOrOptions.payload : commandOrOptions;
+    const onPage = "payload" in commandOrOptions ? undefined : commandOrOptions.onPage;
     const from = new Date(String(range.from));
     const to = new Date(String(range.to));
     if (!Number.isFinite(from.valueOf()) || !Number.isFinite(to.valueOf())) throw new Error("A valid history range is required");
     const searchID = randomUUID();
     const events: GatewayEventPayload[] = [];
     let position = 0;
+    let page = 0;
     while (true) {
+      page += 1;
+      if (page === 1) await onPage?.({
+        phase: "request", at: new Date().toISOString(), page, position
+      });
       const response = await this.call("/ISAPI/AccessControl/AcsEvent", "POST", {
         AcsEventCond: {
           searchID,
@@ -115,7 +121,13 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
       const records = (Array.isArray(list) ? list : [list]).map((item) => item?.AcsEventInfo ?? item).filter(Boolean);
       for (const event of records) events.push(normalizeHistoryEvent(this.device, event));
       position += records.length;
-      if (!records.length || records.length < 30 || (Number.isFinite(Number(root.totalMatches)) && position >= Number(root.totalMatches))) break;
+      const isLast = !records.length || records.length < 30 ||
+        (Number.isFinite(Number(root.totalMatches)) && position >= Number(root.totalMatches));
+      if (page === 1 || isLast) await onPage?.({
+        phase: "received", at: new Date().toISOString(), page, position,
+        records: records.length, isLast
+      });
+      if (isLast) break;
       if (position > 1_000_000) throw new Error("DeviceGateway history pagination exceeded the safety limit");
     }
     return events;

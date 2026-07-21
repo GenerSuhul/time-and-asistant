@@ -12,6 +12,7 @@ const schema = z.discriminatedUnion("action", [
 ]);
 
 Deno.serve(async (req) => {
+  const receivedAt = Date.now();
   const options = handleOptions(req);
   if (options) return options;
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -61,12 +62,51 @@ Deno.serve(async (req) => {
     if (input.employee_id) query = query.eq("employee_id", input.employee_id);
     const { data: rows, error } = await query;
     if (error) throw error;
-    return jsonResponse({ timezone: "America/Guatemala", start_date: start, end_date: end, rows: rows ?? [] });
+    const reportRows = rows ?? [];
+    const ids = reportRows.map((row: any) => row.id as string);
+    let lastCalculatedAt: string | null = null;
+    if (ids.length > 0) {
+      const { data: calculated, error: calculatedError } = await supabase.from("daily_attendance")
+        .select("calculated_at").in("id", ids)
+        .order("calculated_at", { ascending: false }).limit(1).maybeSingle();
+      if (calculatedError) throw calculatedError;
+      lastCalculatedAt = calculated?.calculated_at ?? null;
+    }
+    const { data: latestJob, error: jobError } = await supabase.from("attendance_sync_jobs")
+      .select("id,status,stage,progress,devices_total,devices_done,events_found,events_inserted,events_skipped,error_message,started_at,finished_at,created_at")
+      .eq("date", start).eq("requested_by", actor.user_id)
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (jobError) throw jobError;
+    const isToday = start === end && start === todayInGuatemala();
+    const calculatedAgeMs = lastCalculatedAt ? Date.now() - new Date(lastCalculatedAt).getTime() : Number.POSITIVE_INFINITY;
+    const stale = reportRows.length === 0 || (isToday && calculatedAgeMs > 15 * 60 * 1000 && !latestJob?.status?.match(/pending|processing|calculating/));
+    return jsonResponse({
+      timezone: "America/Guatemala",
+      start_date: start,
+      end_date: end,
+      rows: reportRows,
+      cache: {
+        hit: reportRows.length > 0,
+        stale,
+        last_calculated_at: lastCalculatedAt,
+        response_ms: Date.now() - receivedAt
+      },
+      active_job: latestJob?.status?.match(/pending|processing|calculating/) ? latestJob : null
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return jsonResponse({ error: message.slice(0, 500) }, 400);
   }
 });
+
+function todayInGuatemala() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Guatemala",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
 
 async function actorScope(supabase: any, userId: string) {
   const { data, error } = await supabase.from("user_roles")

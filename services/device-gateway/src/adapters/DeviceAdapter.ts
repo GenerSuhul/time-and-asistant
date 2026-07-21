@@ -20,6 +20,15 @@ export type DeviceCommand = {
 export type HistoryFetchOptions = {
   from: Date;
   to: Date;
+  traceId?: string;
+  onPage?: (event: {
+    phase: "request" | "received";
+    at: string;
+    page: number;
+    position: number;
+    records?: number;
+    isLast?: boolean;
+  }) => void | Promise<void>;
 };
 
 export interface DeviceAdapter {
