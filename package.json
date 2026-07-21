@@ -15,6 +15,7 @@
     "build": "npm --workspaces --if-present run build",
     "lint": "npm --workspaces --if-present run lint",
     "typecheck": "npm --workspaces --if-present run typecheck",
+    "test:attendance-reports": "pnpm --filter @attendance/device-gateway exec tsx --test ../../supabase/functions/_shared/attendance-report-engine.test.ts",
     "gateway:start": "npm --workspace services/device-gateway run start",
     "gateway:pm2": "npm --workspace services/device-gateway run pm2",
     "supabase:push": "supabase db push",

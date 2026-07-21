@@ -23,6 +23,7 @@ import { ManualAdjustmentsPage } from "./pages/ManualAdjustmentsPage";
 import { RangeReportPage } from "./pages/RangeReportPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
+import { AttendanceReportAutomationPage } from "./pages/AttendanceReportAutomationPage";
 
 function Protected({ children }: { children: ReactNode }) {
   const { session, loading } = useSession();
@@ -58,6 +59,7 @@ export function App() {
       <Route path="/audit" element={<Protected><AuditPage /></Protected>} />
       <Route path="/users" element={<Protected><UsersPage /></Protected>} />
       <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
+      <Route path="/attendance-report-automation" element={<Protected><AttendanceReportAutomationPage /></Protected>} />
     </Routes>
   );
 }

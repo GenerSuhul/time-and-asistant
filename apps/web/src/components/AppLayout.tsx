@@ -67,6 +67,7 @@ const navSections = [
     { label: "Usuarios y roles", to: "/users", icon: <ManageAccountsIcon /> },
     { label: "Reporte diario", to: "/daily-report", icon: <FactCheckIcon /> },
     { label: "Reporte rango", to: "/range-report", icon: <FactCheckIcon /> },
+    { label: "Reportes automáticos", to: "/attendance-report-automation", icon: <EventIcon /> },
     { label: "Ajustes manuales", to: "/manual-adjustments", icon: <TuneIcon /> },
     { label: "Auditoria", to: "/audit", icon: <HistoryIcon /> },
     { label: "Configuracion", to: "/settings", icon: <SettingsIcon /> }

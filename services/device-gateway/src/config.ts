@@ -25,7 +25,11 @@ const envSchema = z.object({
   DEVICE_GATEWAY_BASE_URL: z.string().url().default("http://127.0.0.1:18080"),
   DEVICE_GATEWAY_USERNAME: z.string().default("admin"),
   DEVICE_GATEWAY_PASSWORD: z.string().min(1).optional(),
-  DEVICE_GATEWAY_TIMEOUT_MS: z.coerce.number().int().positive().default(15000)
+  DEVICE_GATEWAY_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  ATTENDANCE_REPORTS_ENABLED: z.string().optional().transform((value) => value?.toLowerCase() !== "false"),
+  REPORTS_TIMEZONE: z.literal("America/Guatemala").default("America/Guatemala"),
+  ATTENDANCE_REPORT_SEND_HOUR: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("06:00"),
+  ATTENDANCE_REPORT_SCHEDULER_INTERVAL_SECONDS: z.coerce.number().int().min(30).default(60)
 });
 
 export const config = envSchema.parse(process.env);
