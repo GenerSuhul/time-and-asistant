@@ -59,7 +59,7 @@ export async function generateAttendanceReport(supabase: any, input: GenerateInp
   const syncStatus = run?.sync_status ?? null;
   const partialSync = Boolean(syncStatus && syncStatus !== "complete");
   const subject = `Reporte de asistencia${partialSync ? " parcial" : ""} - ${targetName} - ${reportDate}`;
-  const html = buildBasicHtml({ targetName, reportDate, counts, items, hasViolations: counts.violations > 0, syncStatus });
+  const html = buildReportEmailHtml({ targetName, reportDate, counts, items, hasViolations: counts.violations > 0, syncStatus });
 
   const result = {
     report_date: reportDate,
@@ -285,6 +285,208 @@ function applyCellSeverity(cell: any, severity: string) {
   const color = severity === "violation" ? "FFFECACA" : severity === "warning" ? "FFFEF3C7" : "FFDCFCE7";
   cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
   cell.font = { color: { argb: severity === "violation" ? "FF991B1B" : severity === "warning" ? "FF92400E" : "FF166534" } };
+}
+
+function buildReportEmailHtml(input: { targetName: string; reportDate: string; counts: any; items: any[]; hasViolations: boolean; syncStatus?: string | null }) {
+  const scope = reportEmailScope(input);
+  const schedule = reportEmailSchedule(input.items);
+  const rows = input.items.map((item) => reportEmailRowHtml(item)).join("");
+  const emptyRows = input.items.length === 0 ? `<tr><td colspan="8" style="padding:28px;text-align:center;color:#8b94a7;border-top:1px solid #edf0f7">No hay registros de asistencia para este reporte.</td></tr>` : "";
+  const syncMessage = input.syncStatus && input.syncStatus !== "complete" ? `<div style="margin:0 30px 18px 30px;padding:14px 16px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:14px;line-height:1.45">
+    <strong>Reporte parcial:</strong> algunos dispositivos no respondieron correctamente. El reporte contiene la informacion disponible.
+  </div>` : "";
+  const violationMessage = input.hasViolations ? `<div style="margin:0 30px 18px 30px;padding:14px 16px;border-radius:12px;background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;font-size:14px;line-height:1.45">
+    <strong>Se detectaron alertas de asistencia.</strong> Por favor revisar los colaboradores marcados y responder con la justificacion correspondiente cuando aplique.
+  </div>` : "";
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    @media only screen and (max-width: 720px) {
+      .email-shell { padding: 14px !important; }
+      .hero-cell { display: block !important; width: 100% !important; }
+      .hero-title { font-size: 22px !important; line-height: 1.2 !important; margin-top: 14px !important; }
+      .meta-cell { display: block !important; width: 100% !important; padding: 0 0 10px 0 !important; }
+      .table-wrap { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; }
+      .report-table { min-width: 980px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#f7f8ff;color:#111936;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif">
+  <div class="email-shell" style="padding:24px">
+    <div style="max-width:1480px;margin:0 auto">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;background:#ffffff;border-radius:16px;box-shadow:0 14px 36px rgba(17,25,54,.08);overflow:hidden">
+        <tr>
+          <td style="padding:28px 34px">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td class="hero-cell" style="width:96px;vertical-align:middle">
+                  <div style="font-size:44px;line-height:38px;font-weight:900;letter-spacing:-3px;color:#071039">ac</div>
+                  <div style="width:56px;height:4px;background:#4f46ff;border-radius:8px;margin-top:9px"></div>
+                </td>
+                <td class="hero-cell" style="width:1px;background:#d9deed"></td>
+                <td class="hero-cell" style="vertical-align:middle;padding-left:30px">
+                  <h1 class="hero-title" style="margin:0;font-size:27px;line-height:1.18;color:#111936;font-weight:800;letter-spacing:-.4px">Reporte de Asistencia - ${escapeHtml(input.targetName)}</h1>
+                  <div style="margin-top:10px;font-size:14px;color:#626b82">Bloque: ${escapeHtml(scope.label)}: <span style="color:#4f46ff;font-weight:800">${escapeHtml(scope.value)}</span></div>
+                </td>
+                <td class="hero-cell" align="right" style="width:84px;vertical-align:middle">
+                  <div style="display:inline-block;width:60px;height:60px;border-radius:12px;background:#f1efff;text-align:center;color:#4f46ff;font-size:32px;line-height:60px;font-weight:800">&#10003;</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <div style="padding:26px 22px 12px 22px">
+        <p style="margin:0 0 14px 0;font-size:16px;color:#111936;font-weight:800">Hola equipo,</p>
+        <p style="margin:0 0 22px 0;font-size:14px;color:#111936;line-height:1.5">Adjunto encontraran el reporte de asistencia correspondiente a la sucursal.</p>
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td class="meta-cell" style="padding-right:14px;vertical-align:top;width:250px">${reportMetaPill("&#9635;", "Fecha del reporte:", formatReportEmailDate(input.reportDate))}</td>
+            <td class="meta-cell" style="padding-right:14px;vertical-align:top;width:320px">${reportMetaPill("&#9637;", `${scope.label}:`, scope.value)}</td>
+            <td class="meta-cell" style="vertical-align:top;width:230px">${reportMetaPill("&#9719;", "Horario:", schedule)}</td>
+            <td class="meta-cell" align="right" style="vertical-align:top">${reportLegendHtml()}</td>
+          </tr>
+        </table>
+      </div>
+
+      ${syncMessage}
+      ${violationMessage}
+
+      <div style="background:#ffffff;border:1px solid #e8ebf4;border-radius:18px;box-shadow:0 16px 40px rgba(17,25,54,.08);padding:14px;margin-top:12px">
+        <div class="table-wrap" style="width:100%;overflow-x:auto">
+          <table class="report-table" role="table" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;min-width:980px;font-size:14px;color:#202847">
+            <thead>
+              <tr>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;border-top-left-radius:12px;text-align:left;width:42px"></th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:left">Nombre</th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Hora real de<br>registro de entrada</th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Hora real de<br>registro de salida</th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Grabacion de<br>asistencia</th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Duracion de<br>la pausa</th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Registros de<br>descansos</th>
+                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;border-top-right-radius:12px;text-align:center">Estado / Observacion</th>
+              </tr>
+            </thead>
+            <tbody>${rows}${emptyRows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function reportEmailRowHtml(item: any) {
+  const checkIn = formatReportEmailTime(item.actual_check_in);
+  const checkOut = formatReportEmailTime(item.actual_check_out);
+  const attendanceLog = `${checkIn === "-" ? "Ninguno" : checkIn} / ${checkOut === "-" ? "Ninguno" : checkOut}`;
+  const breakMinutes = Number(item.lunch_minutes ?? 0);
+  const breakDuration = breakMinutes > 0 ? minutesToDuration(breakMinutes) : "-";
+  const breaks = item.lunch_out && item.lunch_in
+    ? `${formatReportEmailTime(item.lunch_out)} - ${formatReportEmailTime(item.lunch_in)}<br><span style="color:#626b82">(${breakMinutes} min)</span>`
+    : "-";
+  return `<tr>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;color:#4f46ff;font-size:18px;text-align:center">&#9817;</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;color:#202847;font-weight:500">${escapeHtml(item.employee_name)}</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${reportTimeCell(checkIn, item.classification.check_in_status)}</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${reportTimeCell(checkOut, item.classification.check_out_status)}</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${escapeHtml(attendanceLog)}</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${reportDurationPill(breakDuration, item.classification.break_status)}</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${breaks}</td>
+    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center;white-space:nowrap">${reportStatusPill(item)} <span style="display:inline-block;margin-left:10px;padding:8px 18px;border:1px solid #d8d6ff;border-radius:8px;color:#4f46ff;font-weight:700;background:#fff">Ver detalle</span> <span style="display:inline-block;margin-left:10px;color:#111936;font-size:18px;vertical-align:middle">&#8942;</span></td>
+  </tr>`;
+}
+
+function reportMetaPill(icon: string, label: string, value: string) {
+  return `<div style="display:inline-block;width:100%;box-sizing:border-box;padding:13px 16px;border:1px solid #e4e6f2;background:#fbfbff;border-radius:8px;color:#111936;font-size:14px;line-height:1.2">
+    <span style="color:#4f46ff;font-size:18px;font-weight:800;vertical-align:middle">${icon}</span>
+    <span style="color:#4f46ff;font-weight:800;margin-left:8px">${escapeHtml(label)}</span>
+    <span style="margin-left:4px">${escapeHtml(value)}</span>
+  </div>`;
+}
+
+function reportLegendHtml() {
+  return `<div style="display:inline-block;padding:13px 18px;border:1px solid #e4e6f2;background:#fbfbff;border-radius:8px;color:#111936;font-size:14px;white-space:nowrap">
+    <span style="display:inline-block;width:10px;height:10px;border-radius:999px;background:#26bf3f;margin-right:7px"></span>OK
+    <span style="display:inline-block;width:10px;height:10px;border-radius:999px;background:#ff244e;margin:0 7px 0 24px"></span>Alerta
+    <span style="display:inline-block;width:10px;height:10px;border-radius:999px;background:#aeb4c1;margin:0 7px 0 24px"></span>Sin dato
+  </div>`;
+}
+
+function reportTimeCell(value: string, severity: string) {
+  if (value === "-") return `<span style="color:#202847">-</span>`;
+  if (severity === "violation") return `<span style="display:inline-block;padding:7px 14px;border-radius:7px;background:#fff1f2;color:#ff244e;font-weight:800;letter-spacing:.4px">${escapeHtml(value)}</span>`;
+  return `<span>${escapeHtml(value)}</span>`;
+}
+
+function reportDurationPill(value: string, severity: string) {
+  if (value === "-") return `<span style="color:#202847">-</span>`;
+  const isBad = severity === "violation";
+  return `<span style="display:inline-block;padding:7px 14px;border-radius:7px;border:1px solid ${isBad ? "#fecdd3" : "#d7f8dc"};background:${isBad ? "#fff1f2" : "#f0fff3"};color:${isBad ? "#ff244e" : "#11a739"};font-weight:700">${escapeHtml(value)}</span>`;
+}
+
+function reportStatusPill(item: any) {
+  const severity = item.classification.severity;
+  const label = reportStatusObservation(item);
+  const colors = severity === "violation"
+    ? { bg: "#fff1f2", fg: "#ff244e", dot: "#ff244e", border: "#ffe1e7" }
+    : severity === "warning"
+      ? { bg: "#f6f7fa", fg: "#545d70", dot: "#aeb4c1", border: "#eceff5" }
+      : { bg: "#ecfff0", fg: "#15803d", dot: "#26bf3f", border: "#d7f8dc" };
+  return `<span style="display:inline-block;min-width:98px;padding:8px 12px;border-radius:7px;border:1px solid ${colors.border};background:${colors.bg};color:${colors.fg};font-weight:800">
+    <span style="display:inline-block;width:9px;height:9px;border-radius:999px;background:${colors.dot};margin-right:8px"></span>${escapeHtml(label)}
+  </span>`;
+}
+
+function reportStatusObservation(item: any) {
+  const codes = new Set(item.classification.codes ?? []);
+  if (item.classification.severity === "ok") return "A tiempo";
+  if (codes.has("late_check_in")) return "Tardia";
+  if (codes.has("early_check_out")) return "Salida temp.";
+  if (codes.has("lunch_exceeded")) return "Pausa alta";
+  if (codes.has("absent_or_no_mark") || codes.has("missing_check_in") || codes.has("missing_check_out")) return "Sin marca";
+  return severityLabel(item.classification.severity);
+}
+
+function reportEmailScope(input: { targetName: string; items: any[] }) {
+  const departments = uniqueNonEmpty(input.items.map((item) => item.department));
+  if (departments.length === 1) return { label: "Departamento", value: departments[0].toUpperCase() };
+  const branches = uniqueNonEmpty(input.items.map((item) => item.branch));
+  if (branches.length === 1) return { label: "Sucursal", value: branches[0] };
+  return { label: "Unidad", value: input.targetName };
+}
+
+function reportEmailSchedule(items: any[]) {
+  const first = items.find((item) => item.expected_check_in || item.expected_check_out);
+  if (!first) return "-";
+  return `${String(first.expected_check_in ?? "").slice(0, 5)} - ${String(first.expected_check_out ?? "").slice(0, 5)}`;
+}
+
+function uniqueNonEmpty(values: string[]) {
+  return [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
+}
+
+function formatReportEmailDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+function formatReportEmailTime(value?: string | null) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("es-GT", { timeZone: "America/Guatemala", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+}
+
+function minutesToDuration(value: number) {
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function buildBasicHtml(input: { targetName: string; reportDate: string; counts: any; items: any[]; hasViolations: boolean; syncStatus?: string | null }) {
