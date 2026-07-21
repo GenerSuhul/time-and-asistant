@@ -33,12 +33,14 @@ export type HistorySyncSummary = {
   errors: Array<{ device_id: string; device_identifier: string | null; error: string }>;
   devices: Array<{
     device_id: string;
+    device_name: string;
     device_identifier: string | null;
     events_found: number;
     events_inserted: number;
     events_updated: number;
     events_skipped: number;
     status: "success" | "partial" | "failed";
+    error: string | null;
   }>;
 };
 
@@ -220,12 +222,14 @@ async function syncOneDevice(
 
   const deviceResult = {
     device_id: device.id,
+    device_name: device.name,
     device_identifier: device.device_identifier ?? null,
     events_found: result.events_found,
     events_inserted: result.events_inserted,
     events_updated: result.events_updated,
     events_skipped: result.events_skipped,
-    status
+    status,
+    error: errorMessage
   };
   result.devices.push(deviceResult);
   if (errorMessage) result.errors.push({

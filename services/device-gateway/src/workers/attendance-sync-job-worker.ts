@@ -88,6 +88,7 @@ async function processJob(job: AttendanceSyncJob) {
       events_found: summary.events_found,
       events_inserted: summary.events_inserted,
       events_skipped: summary.events_skipped,
+      device_results: summary.devices,
       events_upserted_at: eventsUpsertedAt,
       calculation_started_at: calculationStartedAt
     });
@@ -123,6 +124,7 @@ async function processJob(job: AttendanceSyncJob) {
       events_found: summary.events_found,
       events_inserted: summary.events_inserted,
       events_skipped: summary.events_skipped,
+      device_results: summary.devices,
       error_message: summary.errors.length ? sanitizeError(summary.errors.map((item) => item.error).join("; ")) : null,
       events_upserted_at: eventsUpsertedAt,
       calculation_started_at: calculationStartedAt,

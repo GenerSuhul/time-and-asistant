@@ -57,9 +57,15 @@ await new Promise((resolve, reject) => {
   });
 });
 
+const { count: jobsBeforeReport, error: jobsBeforeError } = await admin.from("attendance_sync_jobs")
+  .select("id", { count: "exact", head: true });
+if (jobsBeforeError) throw jobsBeforeError;
 const reportStart = performance.now();
 const beforeReport = await fetchCachedReport(frontend, date);
 const cachedReportRoundTripMs = Math.round(performance.now() - reportStart);
+const { count: jobsAfterReport, error: jobsAfterError } = await admin.from("attendance_sync_jobs")
+  .select("id", { count: "exact", head: true });
+if (jobsAfterError) throw jobsAfterError;
 
 const clientClickedAt = new Date().toISOString();
 const enqueueStart = performance.now();
@@ -93,6 +99,7 @@ const metrics = {
   job_id: jobId,
   response: {
     cached_report_round_trip_ms: cachedReportRoundTripMs,
+    report_read_created_jobs: jobsAfterReport !== jobsBeforeReport,
     enqueue_round_trip_ms: enqueueRoundTripMs,
     duplicate_click_round_trip_ms: duplicateRoundTripMs,
     duplicate_click_same_job: duplicate?.job?.id === jobId,
@@ -106,6 +113,7 @@ const metrics = {
     events_found: terminal.events_found,
     events_inserted: terminal.events_inserted,
     events_skipped: terminal.events_skipped,
+    device_results: terminal.device_results,
     timing: terminal.timing
   },
   realtime: {
