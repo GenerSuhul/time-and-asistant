@@ -223,6 +223,7 @@ function toReportItem(row: any, rule: any) {
     lunch_out: row.lunch_out,
     lunch_in: row.lunch_in,
     lunch_minutes: row.lunch_minutes ?? 0,
+    break_records: Array.isArray(row.break_records) ? row.break_records : [],
     expected_check_out: rule.expected_check_out,
     actual_check_out: row.actual_check_out,
     classification,
@@ -389,9 +390,7 @@ function reportEmailRowHtml(item: any) {
   const attendanceLog = `${checkIn === "-" ? "Ninguno" : checkIn} / ${checkOut === "-" ? "Ninguno" : checkOut}`;
   const breakMinutes = Number(item.lunch_minutes ?? 0);
   const breakDuration = breakMinutes > 0 ? minutesToDuration(breakMinutes) : "-";
-  const breaks = item.lunch_out && item.lunch_in
-    ? `${formatReportEmailTime(item.lunch_out)} - ${formatReportEmailTime(item.lunch_in)}<br><span style="color:#626b82">(${breakMinutes} min)</span>`
-    : "-";
+  const breaks = reportBreakRecordsHtml(item, breakMinutes);
   return `<tr>
     <td style="padding:13px 14px;border-top:1px solid #edf0f7;color:#4f46ff;font-size:18px;text-align:center">&#9817;</td>
     <td style="padding:13px 14px;border-top:1px solid #edf0f7;color:#202847;font-weight:500">${escapeHtml(item.employee_name)}</td>
@@ -402,6 +401,25 @@ function reportEmailRowHtml(item: any) {
     <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${breaks}</td>
     <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center;white-space:nowrap">${reportStatusPill(item)} <span style="display:inline-block;margin-left:10px;padding:8px 18px;border:1px solid #d8d6ff;border-radius:8px;color:#4f46ff;font-weight:700;background:#fff">Ver detalle</span> <span style="display:inline-block;margin-left:10px;color:#111936;font-size:18px;vertical-align:middle">&#8942;</span></td>
   </tr>`;
+}
+
+function reportBreakRecordsHtml(item: any, totalMinutes: number) {
+  const records = Array.isArray(item.break_records) ? item.break_records : [];
+  if (records.length > 0) {
+    return records.map((record: any) => {
+      const out = formatReportEmailTime(record?.out);
+      const back = formatReportEmailTime(record?.in);
+      const minutes = Number(record?.minutes ?? 0);
+      const duration = Number.isFinite(minutes) && minutes > 0 ? minutes : 0;
+      const detail = duration > 0 ? `<br><span style="color:#626b82">(${duration} min)</span>` : "";
+      return `${out} - ${back}${detail}`;
+    }).join("<br>");
+  }
+  if (item.lunch_out || item.lunch_in) {
+    const detail = totalMinutes > 0 ? `<br><span style="color:#626b82">(${totalMinutes} min)</span>` : "";
+    return `${formatReportEmailTime(item.lunch_out)} - ${formatReportEmailTime(item.lunch_in)}${detail}`;
+  }
+  return "-";
 }
 
 function reportMetaPill(icon: string, label: string, value: string) {
