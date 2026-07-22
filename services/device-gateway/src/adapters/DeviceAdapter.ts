@@ -31,6 +31,13 @@ export type HistoryFetchOptions = {
   }) => void | Promise<void>;
 };
 
+export type FingerprintEnrollmentResult = {
+  credentialType: "fingerprint";
+  fingerNo: number;
+  verifiedCount: number;
+  operations: ["CaptureFingerPrint", "FingerPrintDownload"];
+};
+
 export interface DeviceAdapter {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -40,7 +47,7 @@ export interface DeviceAdapter {
   syncFace(command: DeviceCommand): Promise<void>;
   requestFaceEnrollment(command: DeviceCommand): Promise<void>;
   uploadFaceTemplate(command: DeviceCommand): Promise<void>;
-  requestFingerprintEnrollment(command: DeviceCommand): Promise<void>;
+  requestFingerprintEnrollment(command: DeviceCommand): Promise<void | FingerprintEnrollmentResult>;
   uploadFingerprintTemplate(command: DeviceCommand): Promise<void>;
   assignCard(command: DeviceCommand): Promise<void>;
   assignPin(command: DeviceCommand): Promise<void>;

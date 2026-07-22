@@ -1,5 +1,5 @@
 import { createAdapter } from "../adapters/factory.js";
-import type { DeviceAdapter, DeviceCommand, DeviceRecord } from "../adapters/DeviceAdapter.js";
+import type { DeviceAdapter, DeviceCommand, DeviceRecord, FingerprintEnrollmentResult } from "../adapters/DeviceAdapter.js";
 import { logger } from "../logger.js";
 import { supabase } from "../supabase.js";
 import { syncDeviceHistoryRange, type HistorySyncSummary } from "./history-sync-worker.js";
@@ -7,7 +7,9 @@ import { config } from "../config.js";
 
 let running = false;
 
-async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecord): Promise<HistorySyncSummary | void> {
+type CommandExecutionResult = HistorySyncSummary | FingerprintEnrollmentResult | void;
+
+async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecord): Promise<CommandExecutionResult> {
   if (adapterCommand.command_type === "fetch_events") {
     const from = new Date(String(adapterCommand.payload.from ?? ""));
     const to = new Date(String(adapterCommand.payload.to ?? ""));
@@ -28,7 +30,7 @@ async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecor
         if (!("searchPeople" in adapter)) throw new Error("Adapter does not support person search");
         {
           const people = await (adapter as DeviceAdapter & { searchPeople(): Promise<Record<string, unknown>[]> }).searchPeople();
-          const upserted = await importPeople(device, people);
+          const upserted = await importPeople(device, people, adapterCommand);
           await supabase.from("device_sync_logs").insert({
             device_id: device.id, command_id: adapterCommand.id, sync_type: "people", status: "success",
             records_found: people.length, records_upserted: upserted, started_at: new Date().toISOString(), completed_at: new Date().toISOString()
@@ -53,8 +55,7 @@ async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecor
         await (adapter as DeviceAdapter & { deleteFace(command: DeviceCommand): Promise<void> }).deleteFace(adapterCommand);
         break;
       case "enroll_fingerprint":
-        await adapter.requestFingerprintEnrollment(adapterCommand);
-        break;
+        return adapter.requestFingerprintEnrollment(adapterCommand);
       case "delete_fingerprint":
         if (!("deleteFingerprint" in adapter)) throw new Error("Adapter does not support delete_fingerprint");
         await (adapter as DeviceAdapter & { deleteFingerprint(command: DeviceCommand): Promise<void> }).deleteFingerprint(adapterCommand);
@@ -81,7 +82,7 @@ async function executeCommand(adapterCommand: DeviceCommand, device: DeviceRecor
   }
 }
 
-async function importPeople(device: DeviceRecord & { branch_id?: string | null }, people: Record<string, unknown>[]) {
+async function importPeople(device: DeviceRecord & { branch_id?: string | null }, people: Record<string, unknown>[], command: DeviceCommand) {
   if (!device.branch_id) throw new Error("Device must be assigned to a branch before importing people");
   const { data: branch, error: branchError } = await supabase.from("branches").select("company_id").eq("id", device.branch_id).single();
   if (branchError) throw branchError;
@@ -91,11 +92,11 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
     const employeeNo = String(person.employeeNo ?? person.employeeNoString ?? "").trim();
     if (!employeeNo) continue;
     const [linkResult, canonicalResult, externalResult] = await Promise.all([
-      supabase.from("employee_devices").select("employees:employee_id(id,metadata)")
+      supabase.from("employee_devices").select("employees:employee_id(id,metadata,card_number)")
         .eq("device_id", device.id).eq("external_person_id", employeeNo).maybeSingle(),
-      supabase.from("employees").select("id,metadata").eq("company_id", branch.company_id)
+      supabase.from("employees").select("id,metadata,card_number").eq("company_id", branch.company_id)
         .eq("hikvision_employee_no", employeeNo).maybeSingle(),
-      supabase.from("employees").select("id,metadata").eq("company_id", branch.company_id)
+      supabase.from("employees").select("id,metadata,card_number").eq("company_id", branch.company_id)
         .eq("external_employee_id", employeeNo).maybeSingle()
     ]);
     for (const result of [linkResult, canonicalResult, externalResult]) if (result.error) throw result.error;
@@ -114,12 +115,9 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
       const { error } = await supabase.from("employees").update({
         full_name: String(person.name ?? employeeNo).trim() || employeeNo,
         card_number: cardNumber ?? undefined,
-        fingerprint_count: fingerprintCount,
-        fingerprint_status: fingerprintCount > 0 ? "enrolled" : "none",
-        face_status: faceCount > 0 ? "enrolled" : "none",
-        credential_status: credentialStatus,
         metadata: { ...(existing?.metadata ?? {}), source: "devicegateway", devicegateway_last_import_at: new Date().toISOString(),
-          devicegateway_counts: { cards: cardCount, fingerprints: fingerprintCount, faces: faceCount } }
+          devicegateway_counts_by_device: { ...((existing?.metadata as any)?.devicegateway_counts_by_device ?? {}),
+            [device.id]: { cards: cardCount, fingerprints: fingerprintCount, faces: faceCount, verified_at: new Date().toISOString() } } }
       }).eq("id", employeeId);
       if (error) throw error;
     } else {
@@ -154,6 +152,14 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
       last_error: null
     }, { onConflict: "employee_id,device_id" });
     if (linkError) throw linkError;
+    const traceId = traceIdFor({ id: command.id, payload: command.payload });
+    await recordCredentialState(employeeId, device.id, "person", "synced", command.id, traceId, null, 1);
+    await recordCredentialState(employeeId, device.id, "card", cardCount > 0 ? "synced" : existing?.card_number ? "pending" : "none",
+      command.id, traceId, null, cardCount);
+    await recordCredentialState(employeeId, device.id, "fingerprint", fingerprintCount > 0 ? "captured" : "none",
+      command.id, traceId, null, fingerprintCount, { source: "DeviceGateway UserInfo/Search" });
+    await recordCredentialState(employeeId, device.id, "face", faceCount > 0 ? "synced" : "none",
+      command.id, traceId, null, faceCount, { source: "DeviceGateway UserInfo/Search" });
     upserted += 1;
   }
   return upserted;
@@ -215,7 +221,10 @@ export async function runCommandWorkerOnce() {
         .eq("status", "pending");
 
       try {
-        if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, "processing");
+        validateCommandPayload(command);
+        if (command.employee_id && isPersonCommand(command.command_type)) await setEmployeeDeviceState(command.employee_id, command.device_id, "processing");
+        await recordCommandAudit(command, "processing");
+        if (command.employee_id) await recordCommandCredentialState(command, "processing");
         if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status: "processing", started_at: new Date().toISOString(),
             worker_started_at: new Date().toISOString(), status_detail: "Worker tomó el trabajo; esperando dispositivo", error_message: null }).eq("id", command.payload.session_id);
@@ -235,11 +244,21 @@ export async function runCommandWorkerOnce() {
           command.devices as DeviceRecord
         );
 
-        if (commandResult) {
+        if (commandResult && "errors" in commandResult) {
           await supabase.from("device_commands").update({
             metadata: { ...(command.metadata ?? {}), attendance_sync_result: commandResult }
           }).eq("id", command.id);
           if (commandResult.errors.length > 0) throw new Error(commandResult.errors[0]?.error ?? "Historical sync failed");
+        }
+
+        const verifiedFingerprintCount = command.command_type === "enroll_fingerprint"
+          && commandResult && "credentialType" in commandResult
+          && commandResult.credentialType === "fingerprint"
+          && Number.isInteger(commandResult.verifiedCount)
+          && commandResult.verifiedCount > 0
+          ? commandResult.verifiedCount : null;
+        if (command.command_type === "enroll_fingerprint" && !verifiedFingerprintCount) {
+          throw new Error("HIKVISION_FINGERPRINT_NOT_VERIFIED: missing post-download verification");
         }
 
         await supabase
@@ -253,16 +272,16 @@ export async function runCommandWorkerOnce() {
           status: "success",
           message: "Command processed successfully"
         });
-        if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, "success");
+        if (command.employee_id && isPersonCommand(command.command_type)) await setEmployeeDeviceState(command.employee_id, command.device_id, "success");
+        if (command.employee_id) await recordCommandCredentialState(command, "success", null, commandResult);
+        await recordCommandAudit(command, "success", null, commandResult);
         if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status: "success", completed_at: new Date().toISOString(),
-            device_response_at: new Date().toISOString(), status_detail: "Huella capturada", error_message: null }).eq("id", command.payload.session_id);
+            device_response_at: new Date().toISOString(), status_detail: `Huella verificada en el dispositivo (${verifiedFingerprintCount})`,
+            verified_count: verifiedFingerprintCount, error_message: null }).eq("id", command.payload.session_id);
           if (command.payload?.creation_session_id) {
             await supabase.from("employee_creation_sessions").update({ status: "captured", error_code: null, error_message: null }).eq("id", command.payload.creation_session_id);
           } else if (command.employee_id) {
-            const { data: current } = await supabase.from("employees").select("fingerprint_count,credential_status").eq("id", command.employee_id).single();
-            await supabase.from("employees").update({ fingerprint_status: "enrolled", fingerprint_count: Math.max(1, Number(current?.fingerprint_count ?? 0)),
-              credential_status: { ...(current?.credential_status ?? {}), fingerprint: "enrolled" } }).eq("id", command.employee_id);
             if (command.payload?.previous_employee_no) {
               await supabase.from("employee_devices").update({
                 external_person_id: String(command.payload.employee_no), sync_status: "success", last_error: null,
@@ -291,7 +310,9 @@ export async function runCommandWorkerOnce() {
           status: shouldRetry ? "pending" : "failed",
           message: safeError
         });
-        if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, shouldRetry ? "pending" : "failed", safeError);
+        if (command.employee_id && isPersonCommand(command.command_type)) await setEmployeeDeviceState(command.employee_id, command.device_id, shouldRetry ? "pending" : "failed", safeError);
+        if (command.employee_id) await recordCommandCredentialState(command, shouldRetry ? "pending" : "failed", safeError);
+        await recordCommandAudit(command, shouldRetry ? "pending" : "failed", safeError);
         if (!shouldRetry && command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status: "failed", completed_at: new Date().toISOString(),
             device_response_at: new Date().toISOString(), status_detail: "Fallo de captura", error_message: safeError }).eq("id", command.payload.session_id);
@@ -299,7 +320,6 @@ export async function runCommandWorkerOnce() {
             status: "failed", error_code: "HIKVISION_ENROLLMENT_FAILED", error_message: safeError
           }).eq("id", command.payload.creation_session_id);
           else if (command.employee_id) {
-            await supabase.from("employees").update({ fingerprint_status: "failed" }).eq("id", command.employee_id);
             if (command.payload?.previous_employee_no) await enqueueIdentifierCleanup(command, String(command.payload.employee_no));
           }
         } else if (shouldRetry && command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
@@ -348,7 +368,96 @@ async function setEmployeeDeviceState(employeeId: string, deviceId: string, stat
 function sanitizeError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   if (/fingerData|finger_data|template|password|secret|service_role|api[_-]?key/i.test(message)) return "Sensitive DeviceGateway operation failed; see sanitized server diagnostics";
+  if (/device hardware error|subStatusCode["':=\s]+deviceError/i.test(message)) {
+    const operation = message.includes("FingerPrintDownload") ? "FingerPrintDownload" : message.includes("CaptureFingerPrint") ? "CaptureFingerPrint" : "DeviceGateway";
+    return `HIKVISION_DEVICE_HARDWARE_ERROR: ${operation} HTTP 403; el lector reportó deviceError`;
+  }
+  if (/employee_no is required/i.test(message)) return "HIKVISION_EMPLOYEE_NO_REQUIRED: employee_no is required before DeviceGateway";
   return message.replace(/[A-Za-z0-9+/=]{80,}/g, "[redacted]").slice(0, 500);
+}
+
+function validateCommandPayload(command: any) {
+  if (["sync_person", "update_person", "sync_card", "enroll_fingerprint"].includes(command.command_type)) {
+    const employeeNo = String(command.payload?.employee_no ?? "").trim();
+    if (!employeeNo) throw new Error("HIKVISION_EMPLOYEE_NO_REQUIRED: employee_no is required before creating a DeviceGateway request");
+    if (!/^\d+$/.test(employeeNo)) throw new Error("HIKVISION_EMPLOYEE_NO_INVALID: employee_no must contain only digits");
+  }
+  if (command.command_type === "sync_card" && !String(command.payload?.card_no ?? "").trim()) {
+    throw new Error("HIKVISION_CARD_NO_REQUIRED: card_no is required before creating a DeviceGateway request");
+  }
+  if (command.command_type === "enroll_fingerprint") {
+    const fingerNo = Number(command.payload?.finger_no ?? 0);
+    if (!Number.isInteger(fingerNo) || fingerNo < 1 || fingerNo > 10) throw new Error("HIKVISION_FINGER_NO_INVALID");
+  }
+}
+
+function isPersonCommand(commandType: string) {
+  return ["sync_person", "update_person"].includes(commandType);
+}
+
+function traceIdFor(command: { id: string; payload?: Record<string, unknown> }) {
+  const candidate = String(command.payload?.trace_id ?? "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate) ? candidate : command.id;
+}
+
+function credentialTypeForCommand(commandType: string) {
+  if (["sync_person", "update_person", "delete_person"].includes(commandType)) return "person";
+  if (["sync_card", "delete_card"].includes(commandType)) return "card";
+  if (["enroll_fingerprint", "delete_fingerprint"].includes(commandType)) return "fingerprint";
+  if (["sync_face", "delete_face"].includes(commandType)) return "face";
+  return null;
+}
+
+async function recordCredentialState(employeeId: string, deviceId: string, credentialType: string, status: string,
+  commandId: string | null, traceId: string | null, lastError: string | null, verifiedCount: number | null = null,
+  metadata: Record<string, unknown> = {}) {
+  const { error } = await supabase.rpc("record_employee_device_credential_state", {
+    p_employee_id: employeeId, p_device_id: deviceId, p_credential_type: credentialType, p_status: status,
+    p_command_id: commandId, p_trace_id: traceId, p_last_error: lastError,
+    p_verified_count: verifiedCount, p_metadata: metadata
+  });
+  if (error) throw error;
+}
+
+async function recordCommandCredentialState(command: any, status: string, lastError: string | null = null,
+  result?: CommandExecutionResult) {
+  const credentialType = credentialTypeForCommand(command.command_type);
+  if (!credentialType || !command.employee_id || command.command_type.startsWith("delete_")) return;
+  const verifiedCount = result && "credentialType" in result ? result.verifiedCount
+    : status === "success" && credentialType === "person" ? 1
+    : status === "success" && credentialType === "card" ? 1 : null;
+  const storedStatus = status === "success"
+    ? credentialType === "fingerprint" ? "captured" : "synced"
+    : status;
+  await recordCredentialState(command.employee_id, command.device_id, credentialType, storedStatus,
+    command.id, traceIdFor(command), lastError, verifiedCount,
+    credentialType === "fingerprint" ? { finger_no: Number(command.payload?.finger_no ?? 1) } : {});
+}
+
+async function recordCommandAudit(command: any, status: string, sanitizedError: string | null = null,
+  result?: CommandExecutionResult) {
+  const credentialType = credentialTypeForCommand(command.command_type);
+  if (!credentialType) return;
+  const base = {
+    employee_id: command.employee_id ?? null, creation_session_id: command.payload?.creation_session_id ?? null,
+    device_id: command.device_id, command_id: command.id, status,
+    trace_id: traceIdFor(command), sanitized_error: sanitizedError,
+    metadata: { credential_type: credentialType, finger_no: command.payload?.finger_no ?? undefined }
+  };
+  const actions = command.command_type === "enroll_fingerprint" && status === "success" && result && "operations" in result
+    ? result.operations : [auditAction(command.command_type, sanitizedError)];
+  const { error } = await supabase.from("credential_audit_events").insert(actions.map((action) => ({ ...base, action })));
+  if (error) throw error;
+}
+
+function auditAction(commandType: string, error: string | null) {
+  if (commandType === "enroll_fingerprint") return error?.includes("FingerPrintDownload") ? "FingerPrintDownload" : "CaptureFingerPrint";
+  if (commandType === "sync_person" || commandType === "update_person") return "sync_person";
+  if (commandType === "sync_card") return "sync_card";
+  if (commandType === "delete_person") return "delete_person";
+  if (commandType === "delete_card") return "delete_card";
+  if (commandType === "delete_fingerprint") return "delete_fingerprint";
+  return commandType;
 }
 
 export function startCommandWorker() {

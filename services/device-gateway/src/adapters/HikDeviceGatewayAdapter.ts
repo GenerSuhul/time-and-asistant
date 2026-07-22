@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayEventPayload } from "@attendance/shared";
 import { config } from "../config.js";
-import type { DeviceAdapter, DeviceCommand, DeviceRecord, HistoryFetchOptions } from "./DeviceAdapter.js";
+import type { DeviceAdapter, DeviceCommand, DeviceRecord, FingerprintEnrollmentResult, HistoryFetchOptions } from "./DeviceAdapter.js";
 import { HikDeviceGatewayClient } from "./HikDeviceGatewayClient.js";
 
 export class HikDeviceGatewayAdapter implements DeviceAdapter {
@@ -81,6 +81,15 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     } finally {
       // The template is never persisted or logged and becomes unreachable here.
     }
+    const person = await this.searchPerson(employeeNo);
+    const verifiedCount = Number(person?.numOfFP ?? person?.fingerPrintNum ?? person?.fingerprintCount ?? 0);
+    if (!person || !Number.isInteger(verifiedCount) || verifiedCount < 1) {
+      throw new Error("HIKVISION_FINGERPRINT_NOT_VERIFIED: DeviceGateway did not confirm the fingerprint after download");
+    }
+    return {
+      credentialType: "fingerprint", fingerNo, verifiedCount,
+      operations: ["CaptureFingerPrint", "FingerPrintDownload"]
+    } satisfies FingerprintEnrollmentResult;
   }
   async uploadFingerprintTemplate(_command: DeviceCommand) { throw new Error("Raw fingerprint templates are not accepted by this gateway"); }
   async deleteFingerprint(command: DeviceCommand) {
@@ -155,6 +164,19 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
 
   private call(path: string, method: string, body?: unknown) {
     return this.client.request(`${path}?format=json&devIndex=${encodeURIComponent(this.devIndex)}`, method, body);
+  }
+
+  private async searchPerson(employeeNo: string) {
+    const response = await this.call("/ISAPI/AccessControl/UserInfo/Search", "POST", {
+      UserInfoSearchCond: {
+        searchID: randomUUID(), searchResultPosition: 0, maxResults: 1,
+        EmployeeNoList: [{ employeeNo }]
+      }
+    }) as Record<string, any>;
+    const root = response.UserInfoSearch ?? response.UserInfoSearchResult ?? response;
+    const list = root.UserInfo ?? root.MatchList ?? [];
+    const first = (Array.isArray(list) ? list : [list])[0];
+    return first?.UserInfo ?? first ?? null;
   }
 }
 
