@@ -2,7 +2,7 @@ import { z } from "https://esm.sh/zod@3.24.2";
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { EdgeError, edgeErrorResponse } from "../_shared/errors.ts";
 import { requireRole } from "../_shared/auth.ts";
-import { serviceClient } from "../_shared/supabase.ts";
+import { authenticatedClient, serviceClient } from "../_shared/supabase.ts";
 
 const employeeSchema = z.object({
   company_id: z.string().uuid(), branch_id: z.string().uuid().nullable().optional(),
@@ -38,27 +38,22 @@ Deno.serve(async (req) => {
   try {
     const input = requestSchema.parse(await req.json());
     const supabase = serviceClient();
-    const actor = await requireRole(req, supabase, ["super_admin", "it_admin", "hr_admin"]);
-    if (actor.type !== "user") throw new EdgeError("USER_REQUIRED", "Se requiere un usuario autenticado.", 401);
 
     if (input.action === "start_creation_session") {
+      const startedAt = performance.now();
       const { device_ids: _devices, metadata, ...draft } = input.employee;
       const safeDraft = { ...draft, metadata: sanitizeMetadata(metadata) };
-      const employeeNo = draft.external_employee_id?.trim() || draft.employee_code.trim();
-      const [byCode, byExternal] = await Promise.all([
-        supabase.from("employees").select("id").eq("company_id", draft.company_id).eq("employee_code", draft.employee_code).maybeSingle(),
-        supabase.from("employees").select("id").eq("company_id", draft.company_id).eq("external_employee_id", employeeNo).maybeSingle()
-      ]);
-      if (byCode.error) throw byCode.error;
-      if (byExternal.error) throw byExternal.error;
-      if (byCode.data || byExternal.data) throw new EdgeError("EMPLOYEE_NO_ALREADY_EXISTS", "El ID/employeeNo ya existe en la empresa.", 409);
-      const { data, error } = await supabase.from("employee_creation_sessions").insert({
-        company_id: draft.company_id, branch_id: draft.branch_id || null, department_id: draft.department_id || null,
-        employee_no: employeeNo, full_name: draft.full_name, draft_data: safeDraft, requested_by: actor.user_id, trace_id: traceId
-      }).select("id,status,trace_id,expires_at").single();
+      const { data, error } = await authenticatedClient(req).rpc("admin_start_employee_creation_session", {
+        p_employee: safeDraft, p_trace_id: traceId
+      });
       if (error) throw error;
-      return jsonResponse({ session: data, trace_id: traceId }, 201);
+      return jsonResponse({ session: {
+        id: data.id, status: data.status, trace_id: data.trace_id, expires_at: data.expires_at
+      }, trace_id: traceId, edge_duration_ms: Math.round(performance.now() - startedAt) }, 201);
     }
+
+    const actor = await requireRole(req, supabase, ["super_admin", "it_admin", "hr_admin"]);
+    if (actor.type !== "user") throw new EdgeError("USER_REQUIRED", "Se requiere un usuario autenticado.", 401);
 
     if (input.action === "stage_fingerprint") {
       const { device_ids: _devices, metadata, ...draft } = input.employee;

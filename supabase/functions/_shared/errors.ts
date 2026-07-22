@@ -27,7 +27,7 @@ function mapError(error: unknown, traceId: string) {
   if (error instanceof EdgeError) {
     return { status: error.status, body: clean({ code: error.code, message: error.message, trace_id: traceId, ...error.context }) };
   }
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = errorMessage(error);
   const safe = /fingerData|finger_data|template|password|secret|service_role|api[_-]?key/i.test(raw)
     ? "La operación sensible falló. Consulta el trace_id en los registros del servidor."
     : raw.slice(0, 700);
@@ -36,6 +36,17 @@ function mapError(error: unknown, traceId: string) {
     status: known.status,
     body: clean({ code: known.code, message: known.message, device: known.device, details: known.details, trace_id: traceId })
   };
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const value = error as Record<string, unknown>;
+    const parts = [value.message, value.details, value.hint, value.code]
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    if (parts.length > 0) return [...new Set(parts)].join(" · ");
+  }
+  return String(error);
 }
 
 function knownError(message: string) {
@@ -54,6 +65,7 @@ function knownError(message: string) {
     DEPARTMENT_BRANCH_REQUIRED: [400, "Selecciona al menos una sucursal."],
     DEPARTMENT_BRANCH_SCOPE_REQUIRES_ONE: [400, "Un departamento exclusivo debe tener exactamente una sucursal."],
     DEPARTMENT_BRANCH_COMPANY_MISMATCH: [400, "Todas las sucursales deben pertenecer a la empresa seleccionada."],
+    BRANCH_COMPANY_MISMATCH: [400, "La sucursal seleccionada no pertenece a la empresa."],
     HIKVISION_EMPLOYEE_NO_INVALID: [422, "El dispositivo requiere un employeeNo numérico válido."],
     DEVICE_OFFLINE: [409, "El dispositivo está offline; vuelve a intentarlo cuando esté conectado."],
     DEVICE_NOT_LINKED: [409, "El dispositivo no está enlazado con DeviceGateway."],
