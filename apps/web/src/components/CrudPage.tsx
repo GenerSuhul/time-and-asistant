@@ -101,6 +101,12 @@ async function readFunctionError(error: unknown) {
 
   try {
     const body = await context.clone().json();
+    if (body?.error && typeof body.error === "object") {
+      const item = body.error as Record<string, unknown>;
+      return [item.message, item.code && `Código: ${item.code}`, item.device && `Dispositivo: ${item.device}`,
+        item.job_id && `Job: ${item.job_id}`, item.trace_id && `Trace: ${item.trace_id}`, item.details && `Detalle: ${item.details}`]
+        .filter(Boolean).join(" · ");
+    }
     if (body?.error) return String(body.error);
     if (body?.message) return String(body.message);
   } catch {

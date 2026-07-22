@@ -24,6 +24,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import SearchIcon from "@mui/icons-material/Search";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
+import { invokeEdge } from "../lib/edgeFunction";
 
 export function DailyReportPage() {
   const queryClient = useQueryClient();
@@ -31,7 +32,6 @@ export function DailyReportPage() {
   const [draftBranchId, setDraftBranchId] = useState("");
   const [draftEmployeeId, setDraftEmployeeId] = useState("");
   const [draftDepartmentId, setDraftDepartmentId] = useState("");
-  const [draftGroupId, setDraftGroupId] = useState("");
   const [draftDeviceId, setDraftDeviceId] = useState("");
   const [reportSelection, setReportSelection] = useState<ReportSelection>(() => emptySelection(todayInGuatemala()));
   const [hasGenerated, setHasGenerated] = useState(false);
@@ -51,11 +51,11 @@ export function DailyReportPage() {
     staleTime: 10_000
   });
   const lookups = useQuery({ queryKey: ["attendance-report-lookups"], queryFn: async () => {
-    const [branches, departments, groups, employees, devices] = await Promise.all([
+    const [branches, departments, employees, devices] = await Promise.all([
       supabase.from("branches").select("id,name").order("name"), supabase.from("departments").select("id,name").order("name"),
-      supabase.from("attendance_groups").select("id,name").order("name"), supabase.from("employees").select("id,full_name").order("full_name"),
+      supabase.from("employees").select("id,full_name").order("full_name"),
       supabase.from("devices").select("id,name").order("name")
-    ]); return { branches: branches.data ?? [], departments: departments.data ?? [], groups: groups.data ?? [], employees: employees.data ?? [], devices: devices.data ?? [] };
+    ]); return { branches: branches.data ?? [], departments: departments.data ?? [], employees: employees.data ?? [], devices: devices.data ?? [] };
   }});
 
   const rawQuery = useQuery({
@@ -97,17 +97,14 @@ export function DailyReportPage() {
     const traceId = crypto.randomUUID();
     const requestStarted = performance.now();
     try {
-      const { data, error } = await supabase.functions.invoke("attendance-sync", {
-        body: {
+      const data = await invokeEdge<any>("attendance-sync", {
           action: "enqueue_day",
           date: selection.date,
           device_ids: selection.deviceId ? [selection.deviceId] : undefined,
           force,
           trace_id: traceId,
           client_clicked_at: clientClickedAt
-        }
       });
-      if (error) throw error;
       const job = data?.job;
       if (!job?.id) throw new Error("El servidor no devolvió el job de sincronización");
       console.info(JSON.stringify({
@@ -186,19 +183,17 @@ export function DailyReportPage() {
 
   async function exportExcel() {
     setMessage(null);
-    const { data, error } = await supabase.functions.invoke("export-attendance-excel", {
-      body: {
+    try {
+      const data = await invokeEdge<{ signed_url?: string }>("export-attendance-excel", {
         start_date: reportSelection.date,
         end_date: reportSelection.date,
         branch_id: reportSelection.branchId || undefined,
         department_id: reportSelection.departmentId || undefined,
-        attendance_group_id: reportSelection.groupId || undefined,
         employee_id: reportSelection.employeeId || undefined,
         device_id: reportSelection.deviceId || undefined
-      }
-    });
-    if (error) setMessage(error.message);
-    else if (data?.signed_url) window.open(data.signed_url, "_blank", "noopener,noreferrer");
+      });
+      if (data?.signed_url) window.open(data.signed_url, "_blank", "noopener,noreferrer");
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
 
   async function generateReport() {
@@ -206,7 +201,6 @@ export function DailyReportPage() {
       date: draftDate,
       branchId: draftBranchId,
       departmentId: draftDepartmentId,
-      groupId: draftGroupId,
       employeeId: draftEmployeeId,
       deviceId: draftDeviceId
     });
@@ -244,7 +238,6 @@ export function DailyReportPage() {
     date: draftDate,
     branchId: draftBranchId,
     departmentId: draftDepartmentId,
-    groupId: draftGroupId,
     employeeId: draftEmployeeId,
     deviceId: draftDeviceId
   });
@@ -259,13 +252,12 @@ export function DailyReportPage() {
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Box sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(6, minmax(140px, 1fr))" },
+          gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(5, minmax(140px, 1fr))" },
           gap: 1.5
         }}>
           <TextField fullWidth size="small" label="Fecha" type="date" value={draftDate} onChange={(event) => setDraftDate(event.target.value)} InputLabelProps={{ shrink: true }} />
           <TextField fullWidth size="small" select label="Sucursal" value={draftBranchId} onChange={(event) => setDraftBranchId(event.target.value)}><MenuItem value="">Todas</MenuItem>{lookups.data?.branches.map((v) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
           <TextField fullWidth size="small" select label="Departamento" value={draftDepartmentId} onChange={(event) => setDraftDepartmentId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.departments.map((v) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
-          <TextField fullWidth size="small" select label="Grupo" value={draftGroupId} onChange={(event) => setDraftGroupId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.groups.map((v) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
           <TextField fullWidth size="small" select label="Empleado" value={draftEmployeeId} onChange={(event) => setDraftEmployeeId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.employees.map((v) => <MenuItem key={v.id} value={v.id}>{v.full_name}</MenuItem>)}</TextField>
           <TextField fullWidth size="small" select label="Dispositivo" value={draftDeviceId} onChange={(event) => setDraftDeviceId(event.target.value)}><MenuItem value="">Todos</MenuItem>{lookups.data?.devices.map((v) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
         </Box>
@@ -321,7 +313,7 @@ export function DailyReportPage() {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Departamento</TableCell><TableCell>Grupo de asistencia</TableCell><TableCell>Nombre</TableCell>
+              <TableCell>Departamento</TableCell><TableCell>Nombre</TableCell>
               <TableCell>Fecha</TableCell>
               <TableCell>Hora real del registro de entrada</TableCell><TableCell>Hora real de registro de salida</TableCell>
               <TableCell>Grabación de asistencia</TableCell><TableCell>Duración de la pausa</TableCell><TableCell>Registros de descansos</TableCell><TableCell>Periodo de tiempo</TableCell><TableCell>Eventos</TableCell>
@@ -330,7 +322,7 @@ export function DailyReportPage() {
           <TableBody>
             {rows.map((row: any) => (
               <TableRow key={row.id} hover>
-                <TableCell>{row.department ?? ""}</TableCell><TableCell>{row.attendance_group ?? ""}</TableCell><TableCell>{row.employee_name ?? row.employee_id}</TableCell>
+                <TableCell>{row.department ?? ""}</TableCell><TableCell>{row.employee_name ?? row.employee_id}</TableCell>
                 <TableCell>{row.attendance_date}</TableCell>
                 <TableCell>{formatGt(row.actual_check_in)}</TableCell><TableCell>{formatGt(row.actual_check_out)}</TableCell>
                 <TableCell>{row.actual_check_in || row.actual_check_out ? `${formatGt(row.actual_check_in)} / ${formatGt(row.actual_check_out)}` : "Ninguno"}</TableCell><TableCell>{row.break_minutes ?? 0} min</TableCell><TableCell>{formatBreaks(row.break_records)}</TableCell><TableCell>{Math.round((row.attendance_minutes ?? 0) / 60 * 100) / 100} h</TableCell>
@@ -407,13 +399,12 @@ type ReportSelection = {
   date: string;
   branchId: string;
   departmentId: string;
-  groupId: string;
   employeeId: string;
   deviceId: string;
 };
 
 function emptySelection(date: string): ReportSelection {
-  return { date, branchId: "", departmentId: "", groupId: "", employeeId: "", deviceId: "" };
+  return { date, branchId: "", departmentId: "", employeeId: "", deviceId: "" };
 }
 
 function draftSelection(selection: ReportSelection): ReportSelection {
@@ -425,7 +416,7 @@ function sameSelection(left: ReportSelection, right: ReportSelection) {
 }
 
 function reportQueryKey(selection: ReportSelection) {
-  return ["daily-report", selection.date, selection.branchId, selection.employeeId, selection.departmentId, selection.groupId, selection.deviceId] as const;
+  return ["daily-report", selection.date, selection.branchId, selection.employeeId, selection.departmentId, selection.deviceId] as const;
 }
 
 async function fetchDailyReport(selection: ReportSelection) {
@@ -449,7 +440,6 @@ async function fetchDailyReport(selection: ReportSelection) {
   const reportRows = reportResult.data ?? [];
   const rows = reportRows.filter((row: any) =>
     (!selection.departmentId || row.department_id === selection.departmentId) &&
-    (!selection.groupId || row.attendance_group_id === selection.groupId) &&
     (!selection.deviceId || row.device_ids?.includes(selection.deviceId))
   );
   const latestJob = jobResult.data;

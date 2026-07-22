@@ -3,6 +3,7 @@ import type { DeviceAdapter, DeviceCommand, DeviceRecord } from "../adapters/Dev
 import { logger } from "../logger.js";
 import { supabase } from "../supabase.js";
 import { syncDeviceHistoryRange, type HistorySyncSummary } from "./history-sync-worker.js";
+import { config } from "../config.js";
 
 let running = false;
 
@@ -153,6 +154,15 @@ export async function runCommandWorkerOnce() {
   running = true;
 
   try {
+    const { data: expiredSessions, error: expiredError } = await supabase.from("employee_creation_sessions")
+      .select("id").in("status", ["draft", "enrolling", "captured"]).lt("expires_at", new Date().toISOString()).limit(20);
+    if (expiredError) throw expiredError;
+    for (const session of expiredSessions ?? []) {
+      const { error: cleanupError } = await supabase.rpc("admin_cancel_employee_creation_session", {
+        p_session_id: session.id, p_requested_by: null, p_reason: "expired"
+      });
+      if (cleanupError) logger.error({ err: cleanupError, creationSessionId: session.id }, "Expired employee creation cleanup failed");
+    }
     await supabase.from("biometric_enrollment_sessions").update({
       status: "timeout", completed_at: new Date().toISOString(), error_message: "Fingerprint capture timed out"
     }).in("status", ["pending", "processing"]).lt("created_at", new Date(Date.now() - 2 * 60 * 1000).toISOString());
@@ -167,6 +177,24 @@ export async function runCommandWorkerOnce() {
     if (error) throw error;
 
     for (const command of commands ?? []) {
+      if (command.depends_on_command_id) {
+        const { data: dependency, error: dependencyError } = await supabase.from("device_commands")
+          .select("status,error_message").eq("id", command.depends_on_command_id).maybeSingle();
+        if (dependencyError) throw dependencyError;
+        if (!dependency || ["failed", "cancelled"].includes(dependency.status)) {
+          const dependencyMessage = dependency?.error_message || "Required preparation job was not available";
+          await supabase.from("device_commands").update({ status: "failed", processed_at: new Date().toISOString(),
+            error_message: `Preparation failed: ${dependencyMessage}` }).eq("id", command.id).eq("status", "pending");
+          if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
+            await supabase.from("biometric_enrollment_sessions").update({ status: "failed", completed_at: new Date().toISOString(),
+              status_detail: "No se pudo preparar la persona", error_message: dependencyMessage }).eq("id", command.payload.session_id);
+            if (command.payload?.creation_session_id) await supabase.from("employee_creation_sessions").update({ status: "failed",
+              error_code: "HIKVISION_PERSON_STAGE_FAILED", error_message: dependencyMessage }).eq("id", command.payload.creation_session_id);
+          }
+          continue;
+        }
+        if (dependency.status !== "success") continue;
+      }
       const attempts = (command.attempts ?? 0) + 1;
       await supabase
         .from("device_commands")
@@ -177,8 +205,15 @@ export async function runCommandWorkerOnce() {
       try {
         if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, "processing");
         if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
-          await supabase.from("biometric_enrollment_sessions").update({ status: "processing", started_at: new Date().toISOString(), error_message: null }).eq("id", command.payload.session_id);
+          await supabase.from("biometric_enrollment_sessions").update({ status: "processing", started_at: new Date().toISOString(),
+            worker_started_at: new Date().toISOString(), status_detail: "Worker tomó el trabajo; esperando dispositivo", error_message: null }).eq("id", command.payload.session_id);
+          if (command.payload?.creation_session_id) await supabase.from("employee_creation_sessions").update({
+            status: "enrolling", error_code: null, error_message: null
+          }).eq("id", command.payload.creation_session_id);
         }
+        if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) await supabase.from("biometric_enrollment_sessions").update({
+          device_request_started_at: new Date().toISOString(), status_detail: "Esperando dedo en el dispositivo"
+        }).eq("id", command.payload.session_id);
         const commandResult = await executeCommand(
           {
             id: command.id,
@@ -208,13 +243,18 @@ export async function runCommandWorkerOnce() {
         });
         if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, "success");
         if (command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
-          await supabase.from("biometric_enrollment_sessions").update({ status: "success", completed_at: new Date().toISOString(), error_message: null }).eq("id", command.payload.session_id);
-          const { data: current } = await supabase.from("employees").select("fingerprint_count,credential_status").eq("id", command.employee_id).single();
-          await supabase.from("employees").update({ fingerprint_status: "enrolled", fingerprint_count: Math.max(1, Number(current?.fingerprint_count ?? 0)),
-            credential_status: { ...(current?.credential_status ?? {}), fingerprint: "enrolled" } }).eq("id", command.employee_id);
+          await supabase.from("biometric_enrollment_sessions").update({ status: "success", completed_at: new Date().toISOString(),
+            device_response_at: new Date().toISOString(), status_detail: "Huella capturada", error_message: null }).eq("id", command.payload.session_id);
+          if (command.payload?.creation_session_id) {
+            await supabase.from("employee_creation_sessions").update({ status: "captured", error_code: null, error_message: null }).eq("id", command.payload.creation_session_id);
+          } else if (command.employee_id) {
+            const { data: current } = await supabase.from("employees").select("fingerprint_count,credential_status").eq("id", command.employee_id).single();
+            await supabase.from("employees").update({ fingerprint_status: "enrolled", fingerprint_count: Math.max(1, Number(current?.fingerprint_count ?? 0)),
+              credential_status: { ...(current?.credential_status ?? {}), fingerprint: "enrolled" } }).eq("id", command.employee_id);
+          }
         }
       } catch (error) {
-        const shouldRetry = command.command_type !== "fetch_events" && attempts < (command.max_attempts ?? 5);
+        const shouldRetry = !["fetch_events", "enroll_fingerprint"].includes(command.command_type) && attempts < (command.max_attempts ?? 5);
         const backoffSeconds = Math.min(300, 2 ** attempts * 5);
         const safeError = sanitizeError(error);
         await supabase
@@ -234,8 +274,14 @@ export async function runCommandWorkerOnce() {
         });
         if (command.employee_id) await setEmployeeDeviceState(command.employee_id, command.device_id, shouldRetry ? "pending" : "failed", safeError);
         if (!shouldRetry && command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
-          await supabase.from("biometric_enrollment_sessions").update({ status: "failed", completed_at: new Date().toISOString(), error_message: safeError }).eq("id", command.payload.session_id);
-          await supabase.from("employees").update({ fingerprint_status: "failed" }).eq("id", command.employee_id);
+          await supabase.from("biometric_enrollment_sessions").update({ status: "failed", completed_at: new Date().toISOString(),
+            device_response_at: new Date().toISOString(), status_detail: "Fallo de captura", error_message: safeError }).eq("id", command.payload.session_id);
+          if (command.payload?.creation_session_id) await supabase.from("employee_creation_sessions").update({
+            status: "failed", error_code: "HIKVISION_ENROLLMENT_FAILED", error_message: safeError
+          }).eq("id", command.payload.creation_session_id);
+          else if (command.employee_id) await supabase.from("employees").update({ fingerprint_status: "failed" }).eq("id", command.employee_id);
+        } else if (shouldRetry && command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
+          await supabase.from("biometric_enrollment_sessions").update({ status_detail: `Reintento ${attempts} programado`, error_message: safeError }).eq("id", command.payload.session_id);
         }
         if (!shouldRetry && command.command_type === "sync_device_people") {
           await supabase.from("device_sync_logs").insert({ device_id: command.device_id, command_id: command.id,
@@ -259,7 +305,7 @@ async function setEmployeeDeviceState(employeeId: string, deviceId: string, stat
 
 function sanitizeError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/fingerData|template|biometric|password|secret|key/i.test(message)) return "Sensitive DeviceGateway operation failed; see sanitized server diagnostics";
+  if (/fingerData|finger_data|template|password|secret|service_role|api[_-]?key/i.test(message)) return "Sensitive DeviceGateway operation failed; see sanitized server diagnostics";
   return message.replace(/[A-Za-z0-9+/=]{80,}/g, "[redacted]").slice(0, 500);
 }
 
@@ -267,5 +313,5 @@ export function startCommandWorker() {
   void runCommandWorkerOnce().catch((error) => logger.error({ err: error }, "Command worker failed"));
   setInterval(() => {
     void runCommandWorkerOnce().catch((error) => logger.error({ err: error }, "Command worker failed"));
-  }, 5000);
+  }, config.COMMAND_WORKER_INTERVAL_MS);
 }

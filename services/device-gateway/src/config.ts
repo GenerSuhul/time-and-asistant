@@ -26,6 +26,7 @@ const envSchema = z.object({
   DEVICE_GATEWAY_USERNAME: z.string().default("admin"),
   DEVICE_GATEWAY_PASSWORD: z.string().min(1).optional(),
   DEVICE_GATEWAY_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  COMMAND_WORKER_INTERVAL_MS: z.coerce.number().int().min(250).max(5000).default(1000),
   ATTENDANCE_REPORTS_ENABLED: z.string().optional().transform((value) => value?.toLowerCase() !== "false"),
   REPORTS_TIMEZONE: z.literal("America/Guatemala").default("America/Guatemala"),
   ATTENDANCE_REPORT_SEND_HOUR: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("06:00"),

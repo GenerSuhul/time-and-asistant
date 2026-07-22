@@ -5,6 +5,8 @@ export type AttendanceRule = {
   expected_check_in: string;
   expected_check_out: string;
   max_break_minutes: number;
+  check_in_tolerance_minutes?: number;
+  check_out_tolerance_minutes?: number;
 };
 
 export type AttendanceInput = {
@@ -82,11 +84,11 @@ export function classifyAttendance(input: AttendanceInput, rule: AttendanceRule)
     };
   }
 
-  if (localMinutes(input.actual_check_in) > timeMinutes(rule.expected_check_in)) {
+  if (localMinutes(input.actual_check_in) > timeMinutes(rule.expected_check_in) + Number(rule.check_in_tolerance_minutes ?? 0)) {
     codes.push("late_check_in");
     checkInStatus = "violation";
   }
-  if (localMinutes(input.actual_check_out) < timeMinutes(rule.expected_check_out)) {
+  if (localMinutes(input.actual_check_out) < timeMinutes(rule.expected_check_out) - Number(rule.check_out_tolerance_minutes ?? 0)) {
     codes.push("early_check_out");
     checkOutStatus = "violation";
   }

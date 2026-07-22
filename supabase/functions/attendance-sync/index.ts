@@ -3,6 +3,7 @@ import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { requireRole } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 import { calculateAttendanceForDate } from "../_shared/attendance.ts";
+import { edgeErrorResponse } from "../_shared/errors.ts";
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const common = {
@@ -42,6 +43,7 @@ type ScopedDevice = { id: string; company_id: string | null };
 
 Deno.serve(async (req) => {
   const edgeReceivedAt = new Date().toISOString();
+  const traceId = crypto.randomUUID();
   const options = handleOptions(req);
   if (options) return options;
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -153,9 +155,7 @@ Deno.serve(async (req) => {
       ...summary
     }, processing ? 202 : 200);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const status = /Unauthorized|Missing Authorization/i.test(message) ? 401 : /Forbidden|scope/i.test(message) ? 403 : 400;
-    return jsonResponse({ error: sanitizeError(message) }, status);
+    return edgeErrorResponse(error, traceId);
   }
 });
 

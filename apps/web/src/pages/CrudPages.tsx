@@ -14,36 +14,22 @@ const branchFields: CrudField[] = [
   { name: "code", label: "Codigo" },
   { name: "address", label: "Direccion", fullWidth: true },
   { name: "timezone", label: "Zona horaria", required: true, defaultValue: "America/Guatemala" },
+  { name: "unit_type", label: "Tipo de unidad", type: "select", options: ["store", "administration"], defaultValue: "store" },
   { name: "is_active", label: "Activa", type: "boolean", defaultValue: true }
 ];
 
-const departmentFields: CrudField[] = [
-  { name: "company_id", label: "Empresa", type: "relation", required: true, relation: { table: "companies", labelColumn: "name" } },
-  { name: "branch_id", label: "Sucursal", type: "relation", relation: { table: "branches", labelColumn: "name" } },
-  { name: "name", label: "Nombre", required: true },
-  { name: "code", label: "Codigo" },
-  { name: "is_active", label: "Activo", type: "boolean", defaultValue: true }
-];
-
-const groupFields: CrudField[] = [
-  { name: "company_id", label: "Empresa", type: "relation", required: true, relation: { table: "companies", labelColumn: "name" } },
-  { name: "branch_id", label: "Sucursal", type: "relation", relation: { table: "branches", labelColumn: "name" } },
-  { name: "name", label: "Nombre", required: true },
-  { name: "description", label: "Descripcion", type: "textarea", fullWidth: true },
-  { name: "tolerance_minutes", label: "Tolerancia minutos", type: "number", defaultValue: 5 },
-  { name: "is_active", label: "Activo", type: "boolean", defaultValue: true }
-];
-
 const scheduleFields: CrudField[] = [
-  { name: "company_id", label: "Empresa", type: "relation", required: true, relation: { table: "companies", labelColumn: "name" } },
-  { name: "attendance_group_id", label: "Grupo de asistencia", type: "relation", relation: { table: "attendance_groups", labelColumn: "name" } },
+  { name: "company_id", label: "Empresa (opcional)", type: "relation", relation: { table: "companies", labelColumn: "name" } },
+  { name: "code", label: "Código", required: true },
   { name: "name", label: "Nombre", required: true },
+  { name: "applicable_unit_type", label: "Aplica a", type: "select", options: ["store", "administration", "department"], required: true, defaultValue: "store" },
   { name: "timezone", label: "Zona horaria", required: true, defaultValue: "America/Guatemala" },
-  { name: "default_check_in", label: "Entrada", type: "time" },
-  { name: "default_lunch_out", label: "Salida almuerzo", type: "time" },
-  { name: "default_lunch_in", label: "Entrada almuerzo", type: "time" },
-  { name: "default_check_out", label: "Salida", type: "time" },
-  { name: "tolerance_minutes", label: "Tolerancia", type: "number", defaultValue: 5 },
+  { name: "expected_check_in", label: "Entrada esperada", type: "time", required: true },
+  { name: "expected_check_out", label: "Salida esperada", type: "time", required: true },
+  { name: "max_break_minutes", label: "Pausa máxima (min)", type: "number", required: true, defaultValue: 60 },
+  { name: "check_in_tolerance_minutes", label: "Tolerancia entrada (min)", type: "number", defaultValue: 0 },
+  { name: "check_out_tolerance_minutes", label: "Tolerancia salida (min)", type: "number", defaultValue: 0 },
+  { name: "warnings_trigger_hr_copy", label: "Alertas copian a RRHH", type: "boolean", defaultValue: false },
   { name: "is_active", label: "Activo", type: "boolean", defaultValue: true }
 ];
 
@@ -51,7 +37,6 @@ const employeeFields: CrudField[] = [
   { name: "company_id", label: "Empresa", type: "relation", required: true, relation: { table: "companies", labelColumn: "name" } },
   { name: "branch_id", label: "Sucursal", type: "relation", relation: { table: "branches", labelColumn: "name" } },
   { name: "department_id", label: "Departamento", type: "relation", relation: { table: "departments", labelColumn: "name" } },
-  { name: "attendance_group_id", label: "Grupo de asistencia", type: "relation", relation: { table: "attendance_groups", labelColumn: "name" } },
   { name: "employee_code", label: "Codigo empleado", required: true },
   { name: "external_employee_id", label: "ID externo" },
   { name: "full_name", label: "Nombre completo", required: true },
@@ -99,19 +84,11 @@ export function CompaniesPage() {
 }
 
 export function BranchesPage() {
-  return <CrudPage title="Sucursales" table="branches" select="*, companies:company_id(name)" fields={branchFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "code", label: "Codigo" }, { name: "is_active", label: "Activa" }])} />;
-}
-
-export function DepartmentsPage() {
-  return <CrudPage title="Departamentos" table="departments" select="*, companies:company_id(name), branches:branch_id(name)" fields={departmentFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "branches.name", label: "Sucursal" }, { name: "is_active", label: "Activo" }])} />;
-}
-
-export function AttendanceGroupsPage() {
-  return <CrudPage title="Grupos de asistencia" table="attendance_groups" select="*, companies:company_id(name), branches:branch_id(name)" fields={groupFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "branches.name", label: "Sucursal" }, { name: "tolerance_minutes", label: "Tolerancia" }, { name: "is_active", label: "Activo" }])} />;
+  return <CrudPage title="Sucursales" table="branches" select="*, companies:company_id(name)" fields={branchFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "code", label: "Codigo" }, { name: "unit_type", label: "Tipo" }, { name: "is_active", label: "Activa" }])} />;
 }
 
 export function WorkSchedulesPage() {
-  return <CrudPage title="Horarios" table="work_schedules" select="*, companies:company_id(name), attendance_groups:attendance_group_id(name)" fields={scheduleFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "attendance_groups.name", label: "Grupo" }, { name: "default_check_in", label: "Entrada" }, { name: "default_check_out", label: "Salida" }, { name: "is_active", label: "Activo" }])} />;
+  return <CrudPage title="Horarios y reglas de asistencia" table="attendance_report_rules" select="*, companies:company_id(name)" fields={scheduleFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "applicable_unit_type", label: "Aplica a" }, { name: "expected_check_in", label: "Entrada" }, { name: "expected_check_out", label: "Salida" }, { name: "max_break_minutes", label: "Pausa máxima" }, { name: "is_active", label: "Activo" }])} />;
 }
 
 export function EmployeesPage() {

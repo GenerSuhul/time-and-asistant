@@ -53,7 +53,6 @@ const navSections = [
     { label: "Empresas", to: "/companies", icon: <ApartmentIcon /> },
     { label: "Sucursales", to: "/branches", icon: <ApartmentIcon /> },
     { label: "Departamentos", to: "/departments", icon: <GroupsIcon /> },
-    { label: "Grupos asistencia", to: "/attendance-groups", icon: <FactCheckIcon /> },
     { label: "Horarios", to: "/work-schedules", icon: <EventIcon /> }
   ],
   [

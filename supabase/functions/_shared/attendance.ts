@@ -58,14 +58,10 @@ function pairBreaks(events: EventRow[]) {
   return records;
 }
 
-function dayOfWeek(date: string) {
-  return new Date(`${date}T12:00:00Z`).getUTCDay();
-}
-
 export async function calculateAttendanceForDate(supabase: SupabaseClientLike, params: CalculateParams) {
   let employeesQuery = supabase
     .from("employees")
-    .select("id, company_id, branch_id, attendance_group_id, status")
+    .select("id, company_id, branch_id, department_id, status")
     .eq("status", "active");
 
   if (params.employee_id) employeesQuery = employeesQuery.eq("id", params.employee_id);
@@ -79,14 +75,18 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
   if (employeeRows.length === 0) return { processed_count: 0, employee_ids: [] };
 
   const employeeIds = employeeRows.map((employee: any) => employee.id as string);
-  const groupIds = [...new Set(employeeRows.map((employee: any) => employee.attendance_group_id).filter(Boolean))];
   const companyIds = [...new Set(employeeRows.map((employee: any) => employee.company_id).filter(Boolean))];
+  const branchIds = [...new Set(employeeRows.map((employee: any) => employee.branch_id).filter(Boolean))];
 
-  const schedulesRequest = groupIds.length
-    ? supabase.from("work_schedules")
-        .select("id,attendance_group_id,default_check_in,default_check_out,tolerance_minutes")
-        .in("attendance_group_id", groupIds).eq("is_active", true)
-    : Promise.resolve({ data: [], error: null });
+  const globalRulesRequest = supabase.from("attendance_report_rules")
+    .select("id,company_id,applicable_unit_type,expected_check_in,expected_check_out,max_break_minutes,check_in_tolerance_minutes,check_out_tolerance_minutes,created_at")
+    .is("company_id", null).eq("is_active", true);
+  const companyRulesRequest = companyIds.length ? supabase.from("attendance_report_rules")
+    .select("id,company_id,applicable_unit_type,expected_check_in,expected_check_out,max_break_minutes,check_in_tolerance_minutes,check_out_tolerance_minutes,created_at")
+    .in("company_id", companyIds).eq("is_active", true) : Promise.resolve({ data: [], error: null });
+  const branchesRequest = branchIds.length ? supabase.from("branches").select("id,unit_type").in("id", branchIds) : Promise.resolve({ data: [], error: null });
+  const configsRequest = branchIds.length ? supabase.from("attendance_report_configs").select("branch_id,department_id,rule_id")
+    .in("branch_id", branchIds).eq("is_active", true) : Promise.resolve({ data: [], error: null });
   const eventsRequest = supabase.from("attendance_events")
     .select("employee_id,event_type,occurred_at,source,device_id")
     .in("employee_id", employeeIds).eq("event_date_local", params.date)
@@ -103,24 +103,16 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
     .in("employee_id", employeeIds).eq("status", "approved")
     .lte("start_date", params.date).gte("end_date", params.date);
 
-  const [schedulesResult, eventsResult, adjustmentsResult, holidaysResult, leavesResult] = await Promise.all([
-    schedulesRequest, eventsRequest, adjustmentsRequest, holidaysRequest, leavesRequest
+  const [globalRulesResult, companyRulesResult, branchesResult, configsResult, eventsResult, adjustmentsResult, holidaysResult, leavesResult] = await Promise.all([
+    globalRulesRequest, companyRulesRequest, branchesRequest, configsRequest, eventsRequest, adjustmentsRequest, holidaysRequest, leavesRequest
   ]);
-  for (const result of [schedulesResult, eventsResult, adjustmentsResult, holidaysResult, leavesResult]) {
+  for (const result of [globalRulesResult, companyRulesResult, branchesResult, configsResult, eventsResult, adjustmentsResult, holidaysResult, leavesResult]) {
     if (result.error) throw result.error;
   }
-
-  const schedules = schedulesResult.data ?? [];
-  const scheduleIds = schedules.map((schedule: any) => schedule.id as string);
-  const rulesResult = scheduleIds.length
-    ? await supabase.from("schedule_rules")
-        .select("schedule_id,is_workday,expected_check_in,expected_check_out,tolerance_minutes")
-        .in("schedule_id", scheduleIds).eq("day_of_week", dayOfWeek(params.date))
-    : { data: [], error: null };
-  if (rulesResult.error) throw rulesResult.error;
-
-  const scheduleByGroup = new Map(schedules.map((schedule: any) => [schedule.attendance_group_id, schedule]));
-  const ruleBySchedule = new Map((rulesResult.data ?? []).map((rule: any) => [rule.schedule_id, rule]));
+  const attendanceRules = [...(companyRulesResult.data ?? []), ...(globalRulesResult.data ?? [])];
+  const ruleById = new Map(attendanceRules.map((rule: any) => [rule.id, rule]));
+  const branchById = new Map((branchesResult.data ?? []).map((branch: any) => [branch.id, branch]));
+  const configByScope = new Map((configsResult.data ?? []).map((config: any) => [`${config.branch_id}:${config.department_id ?? "*"}`, config]));
   const eventsByEmployee = groupByEmployee(eventsResult.data ?? []);
   const adjustmentsByEmployee = groupByEmployee(adjustmentsResult.data ?? []);
   const leaveEmployeeIds = new Set((leavesResult.data ?? []).map((leave: any) => leave.employee_id));
@@ -128,12 +120,17 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
   const dailyRows = [];
 
   for (const employee of employeeRows) {
-    const schedule: any = scheduleByGroup.get(employee.attendance_group_id);
-    const scheduleRule: any = schedule?.id ? ruleBySchedule.get(schedule.id) : null;
-    const expectedCheckIn = scheduleRule?.expected_check_in ?? schedule?.default_check_in ?? null;
-    const expectedCheckOut = scheduleRule?.expected_check_out ?? schedule?.default_check_out ?? null;
-    const tolerance = scheduleRule?.tolerance_minutes ?? schedule?.tolerance_minutes ?? 5;
-    const isWorkday = scheduleRule?.is_workday ?? Boolean(schedule);
+    const branch: any = branchById.get(employee.branch_id);
+    const config: any = configByScope.get(`${employee.branch_id}:${employee.department_id ?? "*"}`) ?? configByScope.get(`${employee.branch_id}:*`);
+    const unitType = branch?.unit_type ?? "store";
+    const rule: any = (config?.rule_id ? ruleById.get(config.rule_id) : null) ?? attendanceRules.find((candidate: any) =>
+      candidate.company_id === employee.company_id && candidate.applicable_unit_type === unitType) ?? attendanceRules.find((candidate: any) =>
+      candidate.company_id === null && candidate.applicable_unit_type === unitType);
+    const expectedCheckIn = rule?.expected_check_in ?? null;
+    const expectedCheckOut = rule?.expected_check_out ?? null;
+    const checkInTolerance = rule?.check_in_tolerance_minutes ?? 0;
+    const checkOutTolerance = rule?.check_out_tolerance_minutes ?? 0;
+    const isWorkday = Boolean(rule);
     const holiday = holidays.some((item: any) => item.company_id === employee.company_id &&
       (item.branch_id === null || item.branch_id === employee.branch_id));
     const leave = leaveEmployeeIds.has(employee.id);
@@ -176,11 +173,11 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
 
     const lateMinutes =
       actualCheckIn && expectedInDate
-        ? Math.max(0, minutesBetween(expectedInDate, actualCheckIn) - tolerance)
+        ? Math.max(0, minutesBetween(expectedInDate, actualCheckIn) - checkInTolerance)
         : 0;
     const earlyLeaveMinutes =
       actualCheckOut && expectedOutDate
-        ? Math.max(0, minutesBetween(actualCheckOut, expectedOutDate) - tolerance)
+        ? Math.max(0, minutesBetween(actualCheckOut, expectedOutDate) - checkOutTolerance)
         : 0;
     const overtimeMinutes =
       actualCheckOut && expectedOutDate ? Math.max(0, minutesBetween(expectedOutDate, actualCheckOut)) : 0;
@@ -189,12 +186,13 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
 
     if (status === "complete" && lateMinutes > 0) status = "late";
     if (status === "complete" && earlyLeaveMinutes > 0) status = "early_leave";
+    if (rule && lunchMinutes > Number(rule.max_break_minutes ?? 0)) warnings.push(`Pausa excedida: ${lunchMinutes} min de ${rule.max_break_minutes} min permitidos.`);
 
     dailyRows.push({
         employee_id: employee.id,
         branch_id: employee.branch_id,
         attendance_date: params.date,
-        schedule_id: schedule?.id ?? null,
+        rule_id: rule?.id ?? null,
         expected_check_in: expectedCheckIn,
         actual_check_in: actualCheckIn?.toISOString() ?? null,
         lunch_out: lunchOut?.toISOString() ?? null,

@@ -189,11 +189,11 @@ async function loadAttendanceRows(supabase: any, date: string, branchId: string,
   const { data, error } = await supabase.from("daily_attendance").select(`
     *,
     employees:employee_id(
-      full_name,employee_code,department_id,attendance_group_id,
-      departments:department_id(name),attendance_groups:attendance_group_id(name)
+      full_name,employee_code,department_id,
+      departments:department_id(name)
     ),
     branches:branch_id(name),
-    work_schedules:schedule_id(name)
+    attendance_report_rules:rule_id(name)
   `).eq("attendance_date", date).eq("branch_id", branchId).order("actual_check_in", { ascending: true, nullsFirst: false });
   if (error) throw error;
   return (data ?? []).filter((row: any) => !departmentId || one(row.employees)?.department_id === departmentId);
@@ -212,12 +212,11 @@ function toReportItem(row: any, rule: any) {
   return {
     id: row.id,
     department: one(employee.departments)?.name ?? "",
-    attendance_group: one(employee.attendance_groups)?.name ?? "",
     branch: one(row.branches)?.name ?? "",
     employee_name: employee.full_name ?? "",
     employee_code: employee.employee_code ?? "",
     date: row.attendance_date,
-    schedule: one(row.work_schedules)?.name ?? "",
+    schedule: one(row.attendance_report_rules)?.name ?? "",
     expected_check_in: rule.expected_check_in,
     actual_check_in: row.actual_check_in,
     lunch_out: row.lunch_out,
@@ -250,7 +249,7 @@ async function buildWorkbook(items: any[], target: string, reportDate: string) {
   workbook.creator = "Hikvision Attendance";
   const sheet = workbook.addWorksheet("Asistencia", { views: [{ state: "frozen", ySplit: 1 }] });
   sheet.columns = [
-    ["Departamento", "department", 22], ["Grupo de asistencia", "attendance_group", 22], ["Sucursal", "branch", 24],
+    ["Departamento", "department", 22], ["Sucursal", "branch", 24],
     ["Nombre", "employee_name", 28], ["Código empleado", "employee_code", 16], ["Fecha", "date", 14],
     ["Horario", "schedule", 20], ["Entrada esperada", "expected_check_in", 18], ["Entrada real", "actual_check_in", 18],
     ["Estado entrada", "check_in_status", 18], ["Salida almuerzo", "lunch_out", 18], ["Entrada almuerzo", "lunch_in", 18],

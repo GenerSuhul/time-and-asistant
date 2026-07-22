@@ -3,6 +3,7 @@ import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 import { calculateAttendanceForDate } from "../_shared/attendance.ts";
 import { requireRole } from "../_shared/auth.ts";
+import { edgeErrorResponse } from "../_shared/errors.ts";
 
 const schema = z.object({
   start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -23,6 +24,7 @@ function datesBetween(start: string, end: string) {
 }
 
 Deno.serve(async (req) => {
+  const traceId = crypto.randomUUID();
   const options = handleOptions(req);
   if (options) return options;
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -37,6 +39,6 @@ Deno.serve(async (req) => {
     }
     return jsonResponse({ days: results.length, results });
   } catch (error) {
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    return edgeErrorResponse(error, traceId);
   }
 });

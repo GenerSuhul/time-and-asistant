@@ -3,19 +3,20 @@ import * as XLSX from "https://esm.sh/xlsx@0.18.5";
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 import { requireRole } from "../_shared/auth.ts";
+import { edgeErrorResponse } from "../_shared/errors.ts";
 
 const schema = z.object({
   start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   branch_id: z.string().uuid().optional(),
   department_id: z.string().uuid().optional(),
-  attendance_group_id: z.string().uuid().optional(),
   device_id: z.string().uuid().optional(),
   employee_id: z.string().uuid().optional(),
   status: z.string().optional()
 });
 
 Deno.serve(async (req) => {
+  const traceId = crypto.randomUUID();
   const options = handleOptions(req);
   if (options) return options;
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -29,9 +30,9 @@ Deno.serve(async (req) => {
       .from("daily_attendance")
       .select(`
         *,
-        employees:employee_id(full_name, employee_code, department_id, attendance_group_id),
+        employees:employee_id(full_name, employee_code, department_id),
         branches:branch_id(name),
-        work_schedules:schedule_id(name)
+        attendance_report_rules:rule_id(name)
       `)
       .gte("attendance_date", filters.start_date)
       .lte("attendance_date", filters.end_date)
@@ -46,23 +47,16 @@ Deno.serve(async (req) => {
     if (error) throw error;
 
     const departmentIds = [...new Set((data ?? []).map((row) => row.employees?.department_id).filter(Boolean))];
-    const groupIds = [...new Set((data ?? []).map((row) => row.employees?.attendance_group_id).filter(Boolean))];
-
-    const [{ data: departments }, { data: groups }] = await Promise.all([
-      departmentIds.length ? supabase.from("departments").select("id,name").in("id", departmentIds) : Promise.resolve({ data: [] }),
-      groupIds.length ? supabase.from("attendance_groups").select("id,name").in("id", groupIds) : Promise.resolve({ data: [] })
-    ]);
+    const { data: departments } = departmentIds.length ? await supabase.from("departments").select("id,name").in("id", departmentIds) : { data: [] };
 
     const departmentById = new Map((departments ?? []).map((item) => [item.id, item.name]));
-    const groupById = new Map((groups ?? []).map((item) => [item.id, item.name]));
 
     const rows = (data ?? [])
       .filter((row) => !filters.department_id || row.employees?.department_id === filters.department_id)
-      .filter((row) => !filters.attendance_group_id || row.employees?.attendance_group_id === filters.attendance_group_id)
       .map((row) => ({
         Departamento: departmentById.get(row.employees?.department_id) ?? "",
-        "Grupo de asistencia": groupById.get(row.employees?.attendance_group_id) ?? "",
         Nombre: row.employees?.full_name ?? "",
+        Horario: row.attendance_report_rules?.name ?? "",
         Fecha: row.attendance_date,
         "Hora real del registro de entrada": formatGuatemala(row.actual_check_in),
         "Hora real de registro de salida": formatGuatemala(row.actual_check_out),
@@ -99,7 +93,7 @@ Deno.serve(async (req) => {
     const { data: signed } = await supabase.storage.from("exports").createSignedUrl(path, 60 * 30);
     return jsonResponse({ path, signed_url: signed?.signedUrl ?? null, rows: rows.length });
   } catch (error) {
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    return edgeErrorResponse(error, traceId);
   }
 });
 

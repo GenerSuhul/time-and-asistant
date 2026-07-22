@@ -5,15 +5,14 @@ import { AppLayout } from "./components/AppLayout";
 import { useSession } from "./hooks/useSession";
 import { AuditPage } from "./pages/AuditPage";
 import {
-  AttendanceGroupsPage,
   BranchesPage,
   CompaniesPage,
-  DepartmentsPage,
   DevicesPage,
   EmployeeDevicesPage,
   EmployeesPage,
   WorkSchedulesPage
 } from "./pages/CrudPages";
+import { DepartmentsPage } from "./pages/DepartmentsPage";
 import { DailyReportPage } from "./pages/DailyReportPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeviceCommandsPage } from "./pages/DeviceCommandsPage";
@@ -46,7 +45,6 @@ export function App() {
       <Route path="/companies" element={<Protected><CompaniesPage /></Protected>} />
       <Route path="/branches" element={<Protected><BranchesPage /></Protected>} />
       <Route path="/departments" element={<Protected><DepartmentsPage /></Protected>} />
-      <Route path="/attendance-groups" element={<Protected><AttendanceGroupsPage /></Protected>} />
       <Route path="/work-schedules" element={<Protected><WorkSchedulesPage /></Protected>} />
       <Route path="/employees" element={<Protected><EmployeesPage /></Protected>} />
       <Route path="/devices" element={<Protected><DevicesPage /></Protected>} />

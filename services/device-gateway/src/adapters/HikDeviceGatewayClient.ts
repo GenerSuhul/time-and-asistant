@@ -39,10 +39,13 @@ export class HikDeviceGatewayClient {
     const text = await response.text();
     let data: unknown = text;
     try { data = text ? JSON.parse(text) : null; } catch { /* DeviceGateway can return XML errors. */ }
-    if (!response.ok) throw new DeviceGatewayRequestError(
-      `DeviceGateway ${method} ${url.pathname} failed with HTTP ${response.status}`,
-      response.status
-    );
+    if (!response.ok) {
+      const detail = sanitizeResponseDetail(data);
+      throw new DeviceGatewayRequestError(
+        `DeviceGateway ${method} ${url.pathname} failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
+        response.status
+      );
+    }
     return data;
   }
 
@@ -114,3 +117,10 @@ function digestHeader(challenge: string, method: string, url: URL, username: str
 }
 
 const md5 = (value: string) => createHash("md5").update(value).digest("hex");
+
+function sanitizeResponseDetail(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (!text) return "";
+  return text.replace(/("?(?:fingerData|finger_data|template)"?\s*[:=]\s*")([^"]+)(")/gi, "$1[redacted]$3")
+    .replace(/[A-Za-z0-9+/=]{80,}/g, "[redacted]").slice(0, 700);
+}

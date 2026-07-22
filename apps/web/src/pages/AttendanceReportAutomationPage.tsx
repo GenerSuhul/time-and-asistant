@@ -28,6 +28,8 @@ const ruleFields: CrudField[] = [
   { name: "expected_check_in", label: "Entrada esperada", type: "time", required: true },
   { name: "expected_check_out", label: "Salida esperada", type: "time", required: true },
   { name: "max_break_minutes", label: "Pausa máxima (min)", type: "number", required: true },
+  { name: "check_in_tolerance_minutes", label: "Tolerancia de entrada (min)", type: "number", defaultValue: 0 },
+  { name: "check_out_tolerance_minutes", label: "Tolerancia de salida (min)", type: "number", defaultValue: 0 },
   { name: "warnings_trigger_hr_copy", label: "Alertas también copian a gerente RRHH", type: "boolean", defaultValue: false },
   { name: "is_active", label: "Activa", type: "boolean", defaultValue: true }
 ];
@@ -73,7 +75,7 @@ function ContactsSection() {
   const lookups = useQuery({ queryKey: ["report-contact-lookups"], queryFn: async () => {
     const [companies, branches, departments] = await Promise.all([
       supabase.from("companies").select("id,name").order("name"), supabase.from("branches").select("id,name,company_id").order("name"),
-      supabase.from("departments").select("id,name,branch_id").order("name")
+      supabase.from("departments").select("id,name,department_branches(branch_id)").order("name")
     ]);
     for (const result of [companies, branches, departments]) if (result.error) throw result.error;
     return { companies: companies.data ?? [], branches: branches.data ?? [], departments: departments.data ?? [] };
@@ -126,7 +128,7 @@ function ContactsSection() {
       <TextField select label="Rol" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{contactRoles.map(role => <MenuItem key={role} value={role}>{roleLabels[role]}</MenuItem>)}</TextField>
       <TextField select label="Empresa" value={form.company_id} onChange={(e) => setForm({ ...form, company_id: e.target.value })}>{lookups.data?.companies.map(v => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
       <TextField select label="Sucursal (opcional)" value={form.branch_id} onChange={(e) => setForm({ ...form, branch_id: e.target.value })}><MenuItem value="">Corporativo</MenuItem>{lookups.data?.branches.filter(v => !form.company_id || v.company_id === form.company_id).map(v => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
-      <TextField select label="Departamento (opcional)" value={form.department_id} onChange={(e) => setForm({ ...form, department_id: e.target.value })}><MenuItem value="">Todos</MenuItem>{lookups.data?.departments.filter(v => !form.branch_id || v.branch_id === form.branch_id).map(v => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
+      <TextField select label="Departamento (opcional)" value={form.department_id} onChange={(e) => setForm({ ...form, department_id: e.target.value })}><MenuItem value="">Todos</MenuItem>{lookups.data?.departments.filter(v => !form.branch_id || v.department_branches?.some((link: any) => link.branch_id === form.branch_id)).map(v => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}</TextField>
       <TextField label="Región (opcional)" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} />
       <FormControlLabel control={<Switch checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />} label="Activo" />
       <FormControlLabel control={<Switch checked={form.receives_store_reports} onChange={(e) => setForm({ ...form, receives_store_reports: e.target.checked })} />} label="Recibe reportes de tienda" />
