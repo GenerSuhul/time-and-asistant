@@ -20,7 +20,7 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
   async disconnect() {}
 
   async syncPerson(command: DeviceCommand) {
-    const employeeNo = required(command, "employee_no");
+    const employeeNo = numericEmployeeNo(command);
     const body = { UserInfo: { employeeNo, name: required(command, "name"), Valid: validity(command) } };
     const modify = command.command_type === "update_person";
     await this.call(modify ? "/ISAPI/AccessControl/UserInfo/Modify" : "/ISAPI/AccessControl/UserInfo/Record", modify ? "PUT" : "POST", modify ? body : { UserInfo: [body.UserInfo] });
@@ -31,7 +31,7 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
   }
 
   async syncCard(command: DeviceCommand) {
-    await this.call("/ISAPI/AccessControl/CardInfo/Record", "POST", { CardInfo: { employeeNo: required(command, "employee_no"), cardNo: required(command, "card_no") } });
+    await this.call("/ISAPI/AccessControl/CardInfo/Record", "POST", { CardInfo: { employeeNo: numericEmployeeNo(command), cardNo: required(command, "card_no") } });
   }
 
   async searchPeople() {
@@ -62,11 +62,11 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
   async requestFaceEnrollment(_command: DeviceCommand) { throw new Error("Face enrollment is disabled by biometric handling policy"); }
   async uploadFaceTemplate(_command: DeviceCommand) { throw new Error("Raw face templates are not accepted by this gateway"); }
   async deleteFace(command: DeviceCommand) {
-    await this.call("/ISAPI/Intelligent/FDLib/FDSearch/Delete", "PUT", { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo: required(command, "employee_no") }] } });
+    await this.call("/ISAPI/Intelligent/FDLib/FDSearch/Delete", "PUT", { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo: numericEmployeeNo(command) }] } });
   }
 
   async requestFingerprintEnrollment(command: DeviceCommand) {
-    const employeeNo = required(command, "employee_no");
+    const employeeNo = numericEmployeeNo(command);
     const fingerNo = Number(command.payload.finger_no ?? 1);
     if (!Number.isInteger(fingerNo) || fingerNo < 1 || fingerNo > 10) throw new Error("finger_no must be between 1 and 10");
     const captured = await this.call("/ISAPI/AccessControl/CaptureFingerPrint", "POST", {
@@ -85,7 +85,7 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
   async uploadFingerprintTemplate(_command: DeviceCommand) { throw new Error("Raw fingerprint templates are not accepted by this gateway"); }
   async deleteFingerprint(command: DeviceCommand) {
     const ids = Array.isArray(command.payload.fingerprint_ids) ? command.payload.fingerprint_ids : [1];
-    await this.call("/ISAPI/AccessControl/FingerPrint/Delete", "PUT", { FingerPrintDelete: { EmployeeNoDetail: { employeeNo: required(command, "employee_no"), fingerPrintID: ids } } });
+    await this.call("/ISAPI/AccessControl/FingerPrint/Delete", "PUT", { FingerPrintDelete: { EmployeeNoDetail: { employeeNo: numericEmployeeNo(command), fingerPrintID: ids } } });
   }
   async assignCard(command: DeviceCommand) { await this.syncCard(command); }
   async assignPin(_command: DeviceCommand) { throw new Error("PIN synchronization is not exposed by the installed DeviceGateway API catalog"); }
@@ -185,6 +185,11 @@ function required(command: DeviceCommand, key: string) {
   const value = command.payload[key];
   if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required`);
   return value.trim();
+}
+function numericEmployeeNo(command: DeviceCommand) {
+  const value = required(command, "employee_no");
+  if (!/^\d+$/.test(value)) throw new Error("HIKVISION_EMPLOYEE_NO_INVALID: employee_no must contain only digits");
+  return value;
 }
 function validity(command: DeviceCommand) {
   return { beginTime: String(command.payload.valid_from ?? "2020-01-01T00:00:00"), endTime: String(command.payload.valid_to ?? "2037-12-31T23:59:59") };

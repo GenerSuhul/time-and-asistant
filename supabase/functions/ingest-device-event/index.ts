@@ -63,14 +63,28 @@ Deno.serve(async (req) => {
       : { data: null };
     const companyId = branch?.company_id ?? null;
 
-    const { data: employee } = payload.employee_external_id && companyId
-      ? await supabase
-          .from("employees")
+    let employee = null;
+    if (payload.employee_external_id && companyId) {
+      const { data: link, error: linkError } = await supabase.from("employee_devices")
+        .select("employees:employee_id(id,branch_id,employee_code,full_name)")
+        .eq("device_id", device.id).eq("external_person_id", payload.employee_external_id).maybeSingle();
+      if (linkError) throw linkError;
+      employee = relation(link?.employees);
+      if (!employee) {
+        const { data, error } = await supabase.from("employees")
           .select("id,branch_id,employee_code,full_name")
-          .eq("company_id", companyId)
-          .eq("external_employee_id", payload.employee_external_id)
-          .maybeSingle()
-      : { data: null };
+          .eq("company_id", companyId).eq("hikvision_employee_no", payload.employee_external_id).maybeSingle();
+        if (error) throw error;
+        employee = data;
+      }
+      if (!employee) {
+        const { data, error } = await supabase.from("employees")
+          .select("id,branch_id,employee_code,full_name")
+          .eq("company_id", companyId).eq("external_employee_id", payload.employee_external_id).maybeSingle();
+        if (error) throw error;
+        employee = data;
+      }
+    }
 
     const eventHash = await sha256(
       payload.external_event_id
@@ -176,6 +190,10 @@ function normalizeEventType(current: string, raw: Record<string, unknown>) {
   if (current !== "unknown") return current;
   const value = String(raw.attendanceStatus ?? raw.attendance_status ?? "").toLowerCase();
   return ({ checkin: "check_in", checkout: "check_out", breakout: "break_out", breakin: "break_in" } as Record<string, string>)[value] ?? "unknown";
+}
+
+function relation(value: any) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function guatemalaDateTime(value: string) {

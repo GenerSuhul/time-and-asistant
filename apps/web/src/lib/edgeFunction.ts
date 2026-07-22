@@ -43,7 +43,9 @@ export function formatFunctionError(error: StructuredFunctionError, fallback = "
 }
 
 function suggestion(code?: string) {
-  if (code === "HIKVISION_EMPLOYEE_NO_INVALID") return "Usa únicamente dígitos en ID/employeeNo.";
+  if (code === "HIKVISION_EMPLOYEE_NO_INVALID") return "Usa únicamente dígitos en employeeNo Hikvision; el código interno sí puede ser alfanumérico.";
+  if (code === "HIKVISION_EMPLOYEE_NO_LOCKED") return "Retira primero las asignaciones de dispositivo si necesitas cambiar el employeeNo.";
+  if (code === "HIKVISION_IDENTIFIER_MIGRATION_REQUIRES_RECREDENTIAL") return "Conserva la identidad actual y coordina el reenrolamiento de todas sus credenciales antes de retirar el ID anterior.";
   if (code === "DEVICE_OFFLINE") return "Confirma que el dispositivo aparezca online e inténtalo de nuevo.";
   if (code === "DEPARTMENT_IN_USE") return "Reasigna las personas/configuraciones o marca el departamento como inactivo.";
   if (code?.includes("SESSION_EXPIRED")) return "Cierra el formulario y comienza una nueva creación.";

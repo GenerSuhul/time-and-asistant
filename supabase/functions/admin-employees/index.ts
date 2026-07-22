@@ -8,6 +8,7 @@ const employeeSchema = z.object({
   company_id: z.string().uuid(), branch_id: z.string().uuid().nullable().optional(),
   department_id: z.string().uuid().nullable().optional(),
   employee_code: z.string().trim().min(1).max(64), external_employee_id: z.string().trim().max(64).nullable().optional(),
+  hikvision_employee_no: z.string().trim().regex(/^\d*$/, "employeeNo Hikvision debe contener únicamente dígitos").max(32).nullable().optional(),
   full_name: z.string().trim().min(1).max(160), email: z.string().email().nullable().optional(),
   phone: z.string().max(40).nullable().optional(), document_number: z.string().max(80).nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).default("active"),
@@ -48,7 +49,8 @@ Deno.serve(async (req) => {
       });
       if (error) throw error;
       return jsonResponse({ session: {
-        id: data.id, status: data.status, trace_id: data.trace_id, expires_at: data.expires_at
+        id: data.id, status: data.status, trace_id: data.trace_id, expires_at: data.expires_at,
+        hikvision_employee_no: data.employee_no
       }, trace_id: traceId, edge_duration_ms: Math.round(performance.now() - startedAt) }, 201);
     }
 
@@ -106,28 +108,12 @@ Deno.serve(async (req) => {
       return jsonResponse({ queued: commands.length, trace_id: traceId, job_ids: commands.map((item) => item.id) }, 202);
     }
     if (input.action === "enroll_fingerprint") {
-      const { data: link, error: linkError } = await supabase.from("employee_devices")
-        .select("external_person_id,devices:device_id(name,status,dev_index)").eq("employee_id", input.employee_id).eq("device_id", input.device_id).maybeSingle();
-      if (linkError) throw linkError;
-      if (!link?.external_person_id) throw new EdgeError("PERSON_NOT_SYNCED", "Sincroniza la persona con el dispositivo antes de capturar huella.", 409);
-      const device = relation(link.devices);
-      if (!device?.dev_index) throw new EdgeError("DEVICE_NOT_LINKED", "El dispositivo no está enlazado con DeviceGateway.", 409, { device: device?.name });
-      const { data: session, error: sessionError } = await supabase.from("biometric_enrollment_sessions").insert({
-        employee_id: input.employee_id, device_id: input.device_id, finger_no: input.finger_no, requested_by: actor.user_id,
-        trace_id: traceId, status_detail: "Solicitud recibida; esperando worker"
-      }).select("*").single();
-      if (sessionError) throw sessionError;
-      const { data: command, error: commandError } = await supabase.from("device_commands").insert({
-        device_id: input.device_id, employee_id: input.employee_id, command_type: "enroll_fingerprint", requested_by: actor.user_id,
-        payload: { employee_no: link.external_person_id, finger_no: input.finger_no, session_id: session.id, trace_id: traceId }
-      }).select("id").single();
-      if (commandError) {
-        await supabase.from("biometric_enrollment_sessions").update({ status: "failed", error_message: "No se pudo encolar la captura" }).eq("id", session.id);
-        throw commandError;
-      }
-      await supabase.from("biometric_enrollment_sessions").update({ device_command_id: command.id }).eq("id", session.id);
-      await supabase.from("employees").update({ fingerprint_status: "pending" }).eq("id", input.employee_id);
-      return jsonResponse({ session, trace_id: traceId, job_id: command.id }, 202);
+      const { data, error } = await supabase.rpc("admin_enroll_employee_fingerprint", {
+        p_employee_id: input.employee_id, p_device_id: input.device_id, p_finger_no: input.finger_no,
+        p_requested_by: actor.user_id, p_trace_id: traceId
+      });
+      if (error) throw error;
+      return jsonResponse({ ...data, trace_id: traceId }, 202);
     }
 
     const { device_ids, metadata, ...employee } = input.employee;

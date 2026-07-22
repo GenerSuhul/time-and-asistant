@@ -90,9 +90,17 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
   for (const person of people) {
     const employeeNo = String(person.employeeNo ?? person.employeeNoString ?? "").trim();
     if (!employeeNo) continue;
-    const { data: existing, error: existingError } = await supabase
-      .from("employees").select("id,metadata").eq("company_id", branch.company_id).eq("external_employee_id", employeeNo).maybeSingle();
-    if (existingError) throw existingError;
+    const [linkResult, canonicalResult, externalResult] = await Promise.all([
+      supabase.from("employee_devices").select("employees:employee_id(id,metadata)")
+        .eq("device_id", device.id).eq("external_person_id", employeeNo).maybeSingle(),
+      supabase.from("employees").select("id,metadata").eq("company_id", branch.company_id)
+        .eq("hikvision_employee_no", employeeNo).maybeSingle(),
+      supabase.from("employees").select("id,metadata").eq("company_id", branch.company_id)
+        .eq("external_employee_id", employeeNo).maybeSingle()
+    ]);
+    for (const result of [linkResult, canonicalResult, externalResult]) if (result.error) throw result.error;
+    const linked = Array.isArray(linkResult.data?.employees) ? linkResult.data.employees[0] : linkResult.data?.employees;
+    const existing = linked ?? canonicalResult.data ?? externalResult.data;
     let employeeId = existing?.id;
     const fingerprintCount = safeCount(person.numOfFP ?? person.fingerPrintNum ?? person.fingerprintCount);
     const faceCount = safeCount(person.numOfFace ?? person.faceNum ?? person.faceCount);
@@ -116,11 +124,15 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
       if (error) throw error;
     } else {
       const fullName = String(person.name ?? employeeNo).trim() || employeeNo;
+      const hikvisionEmployeeNo = /^\d+$/.test(employeeNo)
+        ? employeeNo
+        : await allocateHikvisionEmployeeNo(branch.company_id);
       const { data: created, error } = await supabase.from("employees").insert({
         company_id: branch.company_id,
         branch_id: device.branch_id,
         employee_code: employeeNo,
         external_employee_id: employeeNo,
+        hikvision_employee_no: hikvisionEmployeeNo,
         full_name: fullName,
         card_number: cardNumber,
         fingerprint_count: fingerprintCount,
@@ -251,6 +263,13 @@ export async function runCommandWorkerOnce() {
             const { data: current } = await supabase.from("employees").select("fingerprint_count,credential_status").eq("id", command.employee_id).single();
             await supabase.from("employees").update({ fingerprint_status: "enrolled", fingerprint_count: Math.max(1, Number(current?.fingerprint_count ?? 0)),
               credential_status: { ...(current?.credential_status ?? {}), fingerprint: "enrolled" } }).eq("id", command.employee_id);
+            if (command.payload?.previous_employee_no) {
+              await supabase.from("employee_devices").update({
+                external_person_id: String(command.payload.employee_no), sync_status: "success", last_error: null,
+                last_synced_at: new Date().toISOString()
+              }).eq("employee_id", command.employee_id).eq("device_id", command.device_id);
+              await enqueueIdentifierCleanup(command, String(command.payload.previous_employee_no));
+            }
           }
         }
       } catch (error) {
@@ -279,7 +298,10 @@ export async function runCommandWorkerOnce() {
           if (command.payload?.creation_session_id) await supabase.from("employee_creation_sessions").update({
             status: "failed", error_code: "HIKVISION_ENROLLMENT_FAILED", error_message: safeError
           }).eq("id", command.payload.creation_session_id);
-          else if (command.employee_id) await supabase.from("employees").update({ fingerprint_status: "failed" }).eq("id", command.employee_id);
+          else if (command.employee_id) {
+            await supabase.from("employees").update({ fingerprint_status: "failed" }).eq("id", command.employee_id);
+            if (command.payload?.previous_employee_no) await enqueueIdentifierCleanup(command, String(command.payload.employee_no));
+          }
         } else if (shouldRetry && command.command_type === "enroll_fingerprint" && command.payload?.session_id) {
           await supabase.from("biometric_enrollment_sessions").update({ status_detail: `Reintento ${attempts} programado`, error_message: safeError }).eq("id", command.payload.session_id);
         }
@@ -292,6 +314,26 @@ export async function runCommandWorkerOnce() {
   } finally {
     running = false;
   }
+}
+
+async function allocateHikvisionEmployeeNo(companyId: string) {
+  const { data, error } = await supabase.rpc("allocate_hikvision_employee_no", { p_company_id: companyId });
+  if (error) throw error;
+  const value = String(data ?? "");
+  if (!/^\d+$/.test(value)) throw new Error("HIKVISION_EMPLOYEE_NO_ALLOCATION_FAILED");
+  return value;
+}
+
+async function enqueueIdentifierCleanup(command: any, employeeNo: string) {
+  if (!employeeNo) return;
+  const { error } = await supabase.from("device_commands").insert({
+    device_id: command.device_id,
+    employee_id: command.employee_id ?? null,
+    command_type: "delete_person",
+    requested_by: command.requested_by ?? null,
+    payload: { employee_no: employeeNo, identifier_migration_cleanup: true, trace_id: command.payload?.trace_id }
+  });
+  if (error && error.code !== "23505") logger.error({ err: error, commandId: command.id, deviceId: command.device_id }, "Identifier cleanup enqueue failed");
 }
 
 async function setEmployeeDeviceState(employeeId: string, deviceId: string, status: string, lastError: string | null = null) {

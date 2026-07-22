@@ -30,6 +30,7 @@ type EmployeeRow = {
   branch_id: string | null;
   company_id: string;
   employee_code: string;
+  hikvision_employee_no?: string;
   full_name: string;
 };
 
@@ -67,20 +68,26 @@ async function findEmployee(deviceId: string, companyId: string | null, employee
   const externalRequest = companyId ? supabase.from("employees")
     .select("id,branch_id,company_id,employee_code,full_name")
     .eq("company_id", companyId).eq("external_employee_id", employeeNo).maybeSingle() : Promise.resolve({ data: null, error: null });
+  const canonicalRequest = companyId ? supabase.from("employees")
+    .select("id,branch_id,company_id,employee_code,hikvision_employee_no,full_name")
+    .eq("company_id", companyId).eq("hikvision_employee_no", employeeNo).maybeSingle() : Promise.resolve({ data: null, error: null });
   const codeRequest = companyId ? supabase.from("employees")
     .select("id,branch_id,company_id,employee_code,full_name")
     .eq("company_id", companyId).eq("employee_code", employeeNo).maybeSingle() : Promise.resolve({ data: null, error: null });
   const [
     { data: link, error: linkError },
+    { data: canonical, error: canonicalError },
     { data: external, error: externalError },
     { data: byCode, error: codeError }
-  ] = await Promise.all([linkRequest, externalRequest, codeRequest]);
+  ] = await Promise.all([linkRequest, canonicalRequest, externalRequest, codeRequest]);
   if (linkError) throw linkError;
+  if (canonicalError) throw canonicalError;
   if (externalError) throw externalError;
   if (codeError) throw codeError;
   const linked = Array.isArray(link?.employees) ? link.employees[0] : link?.employees;
   if (linked?.id) return linked as EmployeeRow;
   if (!companyId) return null;
+  if (canonical) return canonical as EmployeeRow;
   if (external) return external as EmployeeRow;
   return (byCode as EmployeeRow | null) ?? null;
 }
@@ -279,10 +286,14 @@ export async function processHistoricalEventBatch(inputs: unknown[]) {
   const employeeByNo = new Map<string, EmployeeRow>();
   if (employeeNos.length > 0) {
     const companyId = device.company_id ?? null;
-    const [linksResult, externalResult, codeResult] = await Promise.all([
+    const [linksResult, canonicalResult, externalResult, codeResult] = await Promise.all([
       supabase.from("employee_devices")
         .select("external_person_id,employees:employee_id(id,branch_id,company_id,employee_code,full_name)")
         .eq("device_id", device.id).in("external_person_id", employeeNos),
+      companyId
+        ? supabase.from("employees").select("id,branch_id,company_id,employee_code,full_name,hikvision_employee_no")
+            .eq("company_id", companyId).in("hikvision_employee_no", employeeNos)
+        : Promise.resolve({ data: [], error: null }),
       companyId
         ? supabase.from("employees").select("id,branch_id,company_id,employee_code,full_name,external_employee_id")
             .eq("company_id", companyId).in("external_employee_id", employeeNos)
@@ -292,10 +303,13 @@ export async function processHistoricalEventBatch(inputs: unknown[]) {
             .eq("company_id", companyId).in("employee_code", employeeNos)
         : Promise.resolve({ data: [], error: null })
     ]);
-    for (const result of [linksResult, externalResult, codeResult]) if (result.error) throw result.error;
+    for (const result of [linksResult, canonicalResult, externalResult, codeResult]) if (result.error) throw result.error;
     for (const link of linksResult.data ?? []) {
       const employee = Array.isArray(link.employees) ? link.employees[0] : link.employees;
       if (employee?.id) employeeByNo.set(link.external_person_id, employee as EmployeeRow);
+    }
+    for (const employee of canonicalResult.data ?? []) {
+      if (!employeeByNo.has(employee.hikvision_employee_no)) employeeByNo.set(employee.hikvision_employee_no, employee as EmployeeRow);
     }
     for (const employee of externalResult.data ?? []) {
       if (!employeeByNo.has(employee.external_employee_id)) employeeByNo.set(employee.external_employee_id, employee as EmployeeRow);
