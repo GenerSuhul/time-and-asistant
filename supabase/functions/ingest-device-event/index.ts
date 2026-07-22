@@ -58,9 +58,13 @@ Deno.serve(async (req) => {
     if (deviceError) throw deviceError;
     if (!device) return jsonResponse({ error: "Device not registered" }, 404);
 
-    const { data: branch } = device.branch_id
-      ? await supabase.from("branches").select("company_id").eq("id", device.branch_id).maybeSingle()
-      : { data: null };
+    const [{ data: branch }, { data: assignedBranches, error: assignedError }] = await Promise.all([
+      device.branch_id
+        ? supabase.from("branches").select("company_id").eq("id", device.branch_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase.from("device_branches").select("branch_id").eq("device_id", device.id)
+    ]);
+    if (assignedError) throw assignedError;
     const companyId = branch?.company_id ?? null;
 
     let employee = null;
@@ -85,6 +89,10 @@ Deno.serve(async (req) => {
         employee = data;
       }
     }
+    const assignedBranchIds = new Set((assignedBranches ?? []).map((item: any) => item.branch_id));
+    const eventBranchId = employee?.branch_id && assignedBranchIds.has(employee.branch_id)
+      ? employee.branch_id
+      : device.branch_id;
 
     const eventHash = await sha256(
       payload.external_event_id
@@ -97,7 +105,7 @@ Deno.serve(async (req) => {
       .upsert(
         {
           device_id: device.id,
-          branch_id: device.branch_id,
+          branch_id: eventBranchId,
           external_event_id: payload.external_event_id ?? null,
           employee_external_id: payload.employee_external_id ?? null,
           employee_id: employee?.id ?? null,
@@ -126,7 +134,7 @@ Deno.serve(async (req) => {
       raw_event_id: rawEvent.id,
       employee_id: employee?.id ?? null,
       company_id: companyId,
-      branch_id: device.branch_id,
+      branch_id: eventBranchId,
       device_id: device.id,
       device_identifier: device.device_identifier ?? device.serial_number,
       dev_index: device.dev_index ?? null,
@@ -157,7 +165,7 @@ Deno.serve(async (req) => {
       employee?.id ? calculateAttendanceForDate(supabase, {
         date: local.date,
         employee_id: employee.id,
-        branch_id: device.branch_id ?? undefined
+        branch_id: eventBranchId ?? undefined
       }) : Promise.resolve(),
       supabase.from("devices").update({ status: "online", last_seen_at: ingestedAt }).eq("id", device.id),
       supabase.from("device_sync_state").upsert(

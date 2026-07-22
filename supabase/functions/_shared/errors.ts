@@ -76,6 +76,10 @@ function knownError(message: string) {
     DEVICE_OFFLINE: [409, "El dispositivo está offline; vuelve a intentarlo cuando esté conectado."],
     DEVICE_NOT_LINKED: [409, "El dispositivo no está enlazado con DeviceGateway."],
     DEVICE_NOT_FOUND: [404, "El dispositivo ya no existe."],
+    DEVICE_BRANCH_REQUIRED: [422, "Selecciona al menos una sucursal para el dispositivo."],
+    DEVICE_PRIMARY_BRANCH_NOT_ASSIGNED: [422, "La sucursal principal debe estar incluida entre las sucursales asignadas."],
+    DEVICE_BRANCH_NOT_FOUND: [404, "Una de las sucursales seleccionadas ya no existe."],
+    DEVICE_BRANCH_COMPANY_MISMATCH: [409, "Todas las sucursales del dispositivo deben pertenecer a la misma empresa."],
     FINGERPRINT_ENROLLMENT_ALREADY_ACTIVE: [409, "Ya existe una captura activa para ese dedo y dispositivo."],
     FORBIDDEN: [403, "No tienes permisos para realizar esta acción."]
   };

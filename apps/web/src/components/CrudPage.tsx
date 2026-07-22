@@ -52,6 +52,10 @@ export type CrudField = {
     labelColumn: string;
     valueColumn?: string;
     orderBy?: string;
+    loadFrom?: {
+      path: string;
+      valueColumn: string;
+    };
   };
 };
 
@@ -231,17 +235,21 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
   function startEdit(row: Row) {
     setEditing(row);
     save.reset();
-    setForm(Object.fromEntries(fields.map((field) => [field.name, row[field.name] ?? (field.type === "boolean" ? false : field.type === "relations" ? [] : "")])));
+    setForm(Object.fromEntries(fields.map((field) => {
+      const source = field.relation?.loadFrom;
+      const loaded = source
+        ? valuesAtPath(row, source.path.split(".")).map((item) => item && typeof item === "object"
+          ? (item as Record<string, unknown>)[source.valueColumn]
+          : undefined).filter(Boolean)
+        : row[field.name];
+      return [field.name, loaded ?? (field.type === "boolean" ? false : field.type === "relations" ? [] : "")];
+    })));
     setOpen(true);
   }
 
   function cellValue(row: Row, name: string) {
-    const value = name.split(".").reduce<unknown>((current, key) => {
-      if (current && typeof current === "object") return (current as Record<string, unknown>)[key];
-      return undefined;
-    }, row);
-    if (typeof value === "boolean") return value ? "Si" : "No";
-    return String(value ?? "");
+    const values = valuesAtPath(row, name.split(".")).filter((value) => value !== undefined && value !== null && value !== "");
+    return values.map((value) => typeof value === "boolean" ? value ? "Si" : "No" : String(value)).join(", ");
   }
 
   function columnValue(row: Row, column: CrudColumn) {
@@ -388,4 +396,12 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
       </Dialog>
     </Stack>
   );
+}
+
+function valuesAtPath(value: unknown, keys: string[]): unknown[] {
+  if (Array.isArray(value)) return value.flatMap((item) => valuesAtPath(item, keys));
+  if (keys.length === 0) return [value];
+  if (!value || typeof value !== "object") return [];
+  const [key, ...remaining] = keys;
+  return valuesAtPath((value as Record<string, unknown>)[key], remaining);
 }

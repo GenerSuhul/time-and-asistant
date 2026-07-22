@@ -55,7 +55,8 @@ const employeeFields: CrudField[] = [
 ];
 
 const deviceFields: CrudField[] = [
-  { name: "branch_id", label: "Sucursal", type: "relation", relation: { table: "branches", labelColumn: "name" } },
+  { name: "branch_ids", label: "Sucursales asignadas", type: "relations", required: true, relation: { table: "branches", labelColumn: "name", loadFrom: { path: "device_branches", valueColumn: "branch_id" } }, helperText: "Puede seleccionar varias sucursales de la misma empresa." },
+  { name: "branch_id", label: "Sucursal principal", type: "relation", relation: { table: "branches", labelColumn: "name" }, helperText: "Fallback para eventos sin una persona identificada; debe estar entre las sucursales asignadas." },
   { name: "name", label: "Device Name", required: true, helperText: "Nombre visible del biometrico en el sistema." },
   { name: "device_identifier", label: "Device ID", required: true, helperText: "Debe coincidir con el Device ID configurado en ISUP 5.0." },
   { name: "ehome_key", label: "EHome Key", type: "password", requiredOnCreate: true, helperText: "Obligatoria al crear. En edición, déjela vacía salvo que necesite reprovisionar; nunca se guarda en devices." },
@@ -96,7 +97,7 @@ export function EmployeesPage() {
 }
 
 export function DevicesPage() {
-  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name)" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Sucursal" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Última conexión (Guatemala)", dateTime: true }])} />;
+  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name), device_branches(branch_id,branches:branch_id(name))" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_branches", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Principal" }, { name: "device_branches.branches.name", label: "Sucursales asignadas" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Última conexión (Guatemala)", dateTime: true }])} />;
 }
 
 export function EmployeeDevicesPage() {

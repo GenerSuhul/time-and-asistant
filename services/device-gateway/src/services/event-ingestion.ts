@@ -23,6 +23,7 @@ type DeviceRow = {
   dev_index?: string | null;
   status: "online" | "offline" | "error";
   company_id?: string | null;
+  branch_ids?: string[];
 };
 
 type EmployeeRow = {
@@ -47,14 +48,15 @@ const attendanceRecalculationTimers = new Map<string, NodeJS.Timeout>();
 
 async function findDevice(payload: GatewayEventPayload): Promise<DeviceRow> {
   const query = payload.device_identifier
-    ? supabase.from("devices").select("*,branches:branch_id(company_id)").eq("device_identifier", payload.device_identifier).maybeSingle()
-    : supabase.from("devices").select("*,branches:branch_id(company_id)").eq("serial_number", payload.serial_number).maybeSingle();
+    ? supabase.from("devices").select("*,branches:branch_id(company_id),device_branches(branch_id)").eq("device_identifier", payload.device_identifier).maybeSingle()
+    : supabase.from("devices").select("*,branches:branch_id(company_id),device_branches(branch_id)").eq("serial_number", payload.serial_number).maybeSingle();
 
   const { data, error } = await query;
   if (error) throw error;
   if (!data) throw new Error("Device is not registered");
   const branch = Array.isArray(data.branches) ? data.branches[0] : data.branches;
-  return { ...data, company_id: branch?.company_id ?? null } as DeviceRow;
+  return { ...data, company_id: branch?.company_id ?? null,
+    branch_ids: (data.device_branches ?? []).map((item: any) => item.branch_id) } as DeviceRow;
 }
 
 async function findEmployee(deviceId: string, companyId: string | null, employeeNo?: string) {
@@ -145,6 +147,7 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
 
     const companyId = device.company_id ?? null;
     const employee = await findEmployee(device.id, companyId, payload.employee_external_id);
+    const branchId = eventBranch(device, employee);
 
     const hash = eventHash(device.id, payload);
     const eventType = normalizeEventType(payload.raw_event_type, payload.payload);
@@ -153,7 +156,7 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
       .from("raw_access_events")
       .insert({
         device_id: device.id,
-        branch_id: device.branch_id,
+        branch_id: branchId,
         external_event_id: payload.external_event_id ?? null,
         employee_external_id: payload.employee_external_id ?? null,
         employee_id: employee?.id ?? null,
@@ -191,7 +194,7 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
       raw_event_id: rawEvent.id,
       employee_id: employee?.id ?? null,
       company_id: companyId,
-      branch_id: device.branch_id,
+      branch_id: branchId,
       device_id: device.id,
       device_identifier: device.device_identifier ?? device.serial_number,
       dev_index: optionalText(device.dev_index),
@@ -255,7 +258,7 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
 
     if (ingestionSource === "realtime") scheduleRealtimeStateUpdate(device, payload, options);
     if (employee?.id && (inserted || updated) && options.recalculateAttendance !== false) {
-      scheduleAttendanceRecalculation(employee.id, device.branch_id, local.date);
+      scheduleAttendanceRecalculation(employee.id, branchId, local.date);
     }
 
     await markQueue(queueId, "success");
@@ -341,7 +344,7 @@ export async function processHistoricalEventBatch(inputs: unknown[]) {
   for (const itemChunk of chunks(items, 100)) {
     const rawRows = itemChunk.map(({ payload, employee, hash }) => ({
       device_id: device.id,
-      branch_id: device.branch_id,
+      branch_id: eventBranch(device, employee),
       external_event_id: payload.external_event_id ?? null,
       employee_external_id: payload.employee_external_id ?? null,
       employee_id: employee?.id ?? null,
@@ -370,7 +373,7 @@ export async function processHistoricalEventBatch(inputs: unknown[]) {
       raw_event_id: rawEvent.id,
       employee_id: employee?.id ?? null,
       company_id: device.company_id ?? null,
-      branch_id: device.branch_id,
+      branch_id: eventBranch(device, employee),
       device_id: device.id,
       device_identifier: device.device_identifier ?? device.serial_number,
       dev_index: optionalText(device.dev_index),
@@ -434,6 +437,11 @@ export async function processHistoricalEventBatch(inputs: unknown[]) {
   }
   const updated = updateRows.length;
   return { inserted, updated, skipped: inputs.length - inserted - updated };
+}
+
+function eventBranch(device: DeviceRow, employee: EmployeeRow | null) {
+  if (employee?.branch_id && (device.branch_ids ?? []).includes(employee.branch_id)) return employee.branch_id;
+  return device.branch_id;
 }
 
 function guatemalaDateTime(value: string) {

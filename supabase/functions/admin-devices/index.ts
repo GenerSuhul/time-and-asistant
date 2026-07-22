@@ -1,10 +1,12 @@
 import { z } from "npm:zod@3.24.2";
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { requireRole } from "../_shared/auth.ts";
+import { EdgeError, edgeErrorResponse } from "../_shared/errors.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 
 const editable = z.object({
   branch_id: z.string().uuid().nullable().optional(),
+  branch_ids: z.array(z.string().uuid()).min(1).max(100).optional(),
   name: z.string().trim().min(1).max(120),
   model: z.string().trim().max(120).nullable().optional(),
   serial_number: z.string().trim().max(120).nullable().optional(),
@@ -33,9 +35,10 @@ const requestSchema = z.discriminatedUnion("action", [
 ]);
 
 Deno.serve(async (req) => {
+  const traceId = crypto.randomUUID();
   const options = handleOptions(req);
   if (options) return options;
-  if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
+  if (req.method !== "POST") return edgeErrorResponse(new EdgeError("METHOD_NOT_ALLOWED", "Método no permitido.", 405), traceId);
 
   try {
     const supabase = serviceClient();
@@ -43,12 +46,8 @@ Deno.serve(async (req) => {
     if (actor.type !== "user") throw new Error("Device administration requires an authenticated user");
     const input = requestSchema.parse(await req.json());
 
-    if (input.action !== "delete" && input.device.branch_id) {
-      const { data: branch, error } = await supabase.from("branches").select("id,company_id").eq("id", input.device.branch_id).maybeSingle();
-      if (error) throw error;
-      if (!branch) throw new Error("Branch not found or outside the administrative scope");
-      await assertCompanyScope(supabase, actor.user_id, branch.company_id);
-    }
+    const assignment = input.action === "delete" ? null : await validateBranches(supabase, input.device.branch_ids, input.device.branch_id);
+    if (assignment) await assertCompanyScope(supabase, actor.user_id, assignment.companyId);
 
     if (input.action !== "create") {
       const { data: existing, error } = await supabase.from("devices").select("id,branches:branch_id(company_id)").eq("id", input.id).maybeSingle();
@@ -59,13 +58,15 @@ Deno.serve(async (req) => {
     }
 
     if (input.action === "create") {
-      const { ehome_key, ...deviceInput } = input.device;
+      const { ehome_key, branch_ids: _branchIds, branch_id: _branchId, ...deviceInput } = input.device;
       const { data, error } = await supabase.from("devices").insert({
-        ...deviceInput, status: "offline", status_reason: "registration_pending", last_seen_at: null
+        ...deviceInput, branch_id: assignment!.primaryBranchId,
+        status: "offline", status_reason: "registration_pending", last_seen_at: null
       }).select("*").single();
       if (error) throw error;
 
       try {
+        await setDeviceBranches(supabase, data.id, assignment!);
         await queueProvisioning(supabase, data.id, ehome_key);
       } catch (queueError) {
         await supabase.from("devices").delete().eq("id", data.id);
@@ -75,12 +76,13 @@ Deno.serve(async (req) => {
     }
 
     if (input.action === "update") {
-      const { ehome_key, ...deviceInput } = input.device;
+      const { ehome_key, branch_ids: _branchIds, branch_id: _branchId, ...deviceInput } = input.device;
       const { data, error } = await supabase.from("devices").update({
-        ...deviceInput,
+        ...deviceInput, branch_id: assignment!.primaryBranchId,
         ...(ehome_key ? { status: "offline", status_reason: "registration_pending" } : {})
       }).eq("id", input.id).select("*").single();
       if (error) throw error;
+      await setDeviceBranches(supabase, input.id, assignment!);
       if (ehome_key) await queueProvisioning(supabase, input.id, ehome_key);
       return jsonResponse({ device: data });
     }
@@ -89,11 +91,31 @@ Deno.serve(async (req) => {
     if (error) throw error;
     return jsonResponse({ deleted: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const status = /Unauthorized|Missing Authorization/.test(message) ? 401 : /Forbidden/.test(message) ? 403 : 400;
-    return jsonResponse({ error: message }, status);
+    return edgeErrorResponse(error, traceId);
   }
 });
+
+async function validateBranches(supabase: any, requested: string[] | undefined, primary: string | null | undefined) {
+  const branchIds = [...new Set((requested?.length ? requested : primary ? [primary] : []))];
+  if (branchIds.length === 0) throw new Error("DEVICE_BRANCH_REQUIRED");
+  const primaryBranchId = primary ?? branchIds[0];
+  if (!branchIds.includes(primaryBranchId)) throw new Error("DEVICE_PRIMARY_BRANCH_NOT_ASSIGNED");
+  const { data, error } = await supabase.from("branches").select("id,company_id").in("id", branchIds);
+  if (error) throw error;
+  if ((data ?? []).length !== branchIds.length) throw new Error("DEVICE_BRANCH_NOT_FOUND");
+  const companies = [...new Set((data ?? []).map((branch: any) => branch.company_id))];
+  if (companies.length !== 1) throw new Error("DEVICE_BRANCH_COMPANY_MISMATCH");
+  return { branchIds, primaryBranchId, companyId: companies[0] as string };
+}
+
+async function setDeviceBranches(supabase: any, deviceId: string, assignment: { branchIds: string[]; primaryBranchId: string }) {
+  const { error } = await supabase.rpc("admin_set_device_branches", {
+    p_device_id: deviceId,
+    p_branch_ids: assignment.branchIds,
+    p_primary_branch_id: assignment.primaryBranchId
+  });
+  if (error) throw error;
+}
 
 async function queueProvisioning(supabase: any, deviceId: string, value: string) {
   const encrypted = await encryptRegistrationKey(value);
