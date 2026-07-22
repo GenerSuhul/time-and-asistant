@@ -35,7 +35,7 @@ export type FingerprintEnrollmentResult = {
   credentialType: "fingerprint";
   fingerNo: number;
   verifiedCount: number;
-  operations: ["CaptureFingerPrint", "FingerPrintDownload"];
+  operations: ["CaptureFingerPrint", "FingerPrintDownload", "AddFingerPrint"];
 };
 
 export interface DeviceAdapter {

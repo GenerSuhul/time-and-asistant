@@ -300,6 +300,8 @@ export async function runCommandWorkerOnce() {
           .update({
             status: shouldRetry ? "pending" : "failed",
             next_run_at: new Date(Date.now() + backoffSeconds * 1000).toISOString(),
+            processed_at: shouldRetry ? null : new Date().toISOString(),
+            locked_at: null,
             error_message: safeError
           })
           .eq("id", command.id);

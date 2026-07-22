@@ -88,7 +88,7 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     }
     return {
       credentialType: "fingerprint", fingerNo, verifiedCount,
-      operations: ["CaptureFingerPrint", "FingerPrintDownload"]
+      operations: ["CaptureFingerPrint", "FingerPrintDownload", "AddFingerPrint"]
     } satisfies FingerprintEnrollmentResult;
   }
   async uploadFingerprintTemplate(_command: DeviceCommand) { throw new Error("Raw fingerprint templates are not accepted by this gateway"); }
