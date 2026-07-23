@@ -33,6 +33,8 @@ import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { useQuery } from "@tanstack/react-query";
 import { Link as RouterLink } from "react-router-dom";
 import { StatusChip } from "../components/StatusChip";
+import { useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
+import { canAccess, type AppPermission } from "../lib/accessControl";
 import { supabase } from "../lib/supabase";
 
 type RecentEvent = {
@@ -113,7 +115,7 @@ async function countRows(table: string, build?: (request: CountRequest) => Count
   return count ?? 0;
 }
 
-async function getDashboardData(): Promise<DashboardData> {
+async function getDashboardData(includeTechnicalOperations: boolean): Promise<DashboardData> {
   const today = todayKey();
   const startIso = todayStartIso();
 
@@ -142,19 +144,23 @@ async function getDashboardData(): Promise<DashboardData> {
     countRows("devices", (request) => request.eq("status", "online")),
     countRows("devices", (request) => request.eq("status", "offline")),
     countRows("devices", (request) => request.eq("status", "error")),
-    countRows("attendance_events", (request) => request.gte("occurred_at", startIso)),
-    countRows("device_commands", (request) => request.eq("status", "pending")),
+    includeTechnicalOperations
+      ? countRows("attendance_events", (request) => request.gte("occurred_at", startIso))
+      : Promise.resolve(0),
+    includeTechnicalOperations
+      ? countRows("device_commands", (request) => request.eq("status", "pending"))
+      : Promise.resolve(0),
     supabase.from("daily_attendance").select("status").eq("attendance_date", today),
-    supabase
+    includeTechnicalOperations ? supabase
       .from("attendance_events")
       .select("id,occurred_at,event_type,employees:employee_id(full_name,employee_code),devices:device_id(name)")
       .order("occurred_at", { ascending: false })
-      .limit(6),
-    supabase
+      .limit(6) : Promise.resolve({ data: [], error: null }),
+    includeTechnicalOperations ? supabase
       .from("device_commands")
       .select("id,created_at,command_type,status,attempts,devices:device_id(name)")
       .order("created_at", { ascending: false })
-      .limit(5)
+      .limit(5) : Promise.resolve({ data: [], error: null })
   ]);
 
   if (attendance.error) throw attendance.error;
@@ -176,7 +182,7 @@ async function getDashboardData(): Promise<DashboardData> {
     onlineDevices,
     offlineDevices,
     errorDevices,
-    todayEvents,
+    todayEvents: includeTechnicalOperations ? todayEvents : attendance.data?.length ?? 0,
     pendingCommands,
     attendanceByStatus,
     recentEvents: (recentEvents.data ?? []) as RecentEvent[],
@@ -327,9 +333,13 @@ function EmptyState({ title, body, to, action }: { title: string; body: string; 
 }
 
 export function DashboardPage() {
+  const currentUser = useCurrentUserProfile();
+  const roleKeys = (currentUser.data?.roles ?? []).map((role) => role.key);
+  const includeTechnicalOperations = canAccess(roleKeys, "commands");
   const query = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: getDashboardData,
+    queryKey: ["dashboard", includeTechnicalOperations],
+    queryFn: () => getDashboardData(includeTechnicalOperations),
+    enabled: Boolean(currentUser.data),
     refetchInterval: 15000
   });
 
@@ -343,7 +353,9 @@ export function DashboardPage() {
         <Box>
           <Typography variant="h4">Dashboard</Typography>
           <Typography color="text.secondary">
-            Asistencia, dispositivos y comandos en una vista limpia.
+            {includeTechnicalOperations
+              ? "Asistencia, dispositivos y comandos en una vista limpia."
+              : "Personas, asistencia, horarios y credenciales en una vista limpia."}
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -393,9 +405,9 @@ export function DashboardPage() {
           ) : (
             <MetricCard
               icon={<EventAvailableIcon />}
-              label="Eventos hoy"
+              label={includeTechnicalOperations ? "Eventos hoy" : "Asistencias hoy"}
               value={data?.todayEvents}
-              helper="Marcajes recibidos"
+              helper={includeTechnicalOperations ? "Marcajes recibidos" : "Registros diarios calculados"}
               color="#4f46e5"
               progress={Math.min((data?.todayEvents ?? 0) * 8, 100)}
             />
@@ -406,12 +418,14 @@ export function DashboardPage() {
             <Skeleton variant="rounded" height={164} />
           ) : (
             <MetricCard
-              icon={<TuneIcon />}
-              label="Comandos pendientes"
-              value={data?.pendingCommands}
-              helper="Cola por procesar"
+              icon={includeTechnicalOperations ? <TuneIcon /> : <BadgeIcon />}
+              label={includeTechnicalOperations ? "Comandos pendientes" : "Empleados con huella"}
+              value={includeTechnicalOperations ? data?.pendingCommands : data?.fingerprints}
+              helper={includeTechnicalOperations ? "Cola por procesar" : "Credencial biométrica registrada"}
               color="#4f46e5"
-              progress={Math.min((data?.pendingCommands ?? 0) * 20, 100)}
+              progress={includeTechnicalOperations
+                ? Math.min((data?.pendingCommands ?? 0) * 20, 100)
+                : credentialTotal ? ((data?.fingerprints ?? 0) / credentialTotal) * 100 : 0}
             />
           )}
         </Grid2>
@@ -540,12 +554,12 @@ export function DashboardPage() {
             }
           >
             <Grid2 container spacing={1.25}>
-              {[
-                { label: "Crear empleados", to: "/employees", icon: <BadgeIcon />, color: "#4f46e5" },
-                { label: "Registrar dispositivo", to: "/devices", icon: <SettingsInputAntennaIcon />, color: "#4f46e5" },
-                { label: "Enviar comando", to: "/commands", icon: <TuneIcon />, color: "#4f46e5" },
-                { label: "Ver eventos", to: "/live-events", icon: <PersonSearchIcon />, color: "#4f46e5" }
-              ].map((item) => (
+              {([
+                { label: "Crear empleados", to: "/employees", permission: "employees" as AppPermission, icon: <BadgeIcon />, color: "#4f46e5" },
+                { label: includeTechnicalOperations ? "Registrar dispositivo" : "Ver dispositivos", to: "/devices", permission: "devices" as AppPermission, icon: <SettingsInputAntennaIcon />, color: "#4f46e5" },
+                { label: "Enviar comando", to: "/commands", permission: "commands" as AppPermission, icon: <TuneIcon />, color: "#4f46e5" },
+                { label: "Ver eventos", to: "/live-events", permission: "live_events" as AppPermission, icon: <PersonSearchIcon />, color: "#4f46e5" }
+              ]).filter((item) => canAccess(roleKeys, item.permission)).map((item) => (
                 <Grid2 key={item.to} size={{ xs: 12, sm: 6 }}>
                   <Button
                     component={RouterLink}
@@ -567,7 +581,7 @@ export function DashboardPage() {
         </Grid2>
       </Grid2>
 
-      <Grid2 container spacing={2}>
+      {includeTechnicalOperations && <Grid2 container spacing={2}>
         <Grid2 size={{ xs: 12, lg: 7 }}>
           <Panel title="Eventos recientes" action={<Button component={RouterLink} to="/live-events" size="small">Ver todos</Button>}>
             {(data?.recentEvents.length ?? 0) === 0 ? (
@@ -632,7 +646,7 @@ export function DashboardPage() {
             )}
           </Panel>
         </Grid2>
-      </Grid2>
+      </Grid2>}
 
     </Stack>
   );

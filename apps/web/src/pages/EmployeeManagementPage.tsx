@@ -115,10 +115,8 @@ export function EmployeeManagementPage() {
         ids.length ? supabase.from("employee_devices").select("*,devices:device_id(id,name,status,dev_index)").in("employee_id", ids).order("created_at") : Promise.resolve({ data: [], error: null }),
         ids.length ? supabase.from("employee_device_credentials").select("*").in("employee_id", ids).order("credential_type") : Promise.resolve({ data: [], error: null }),
         ids.length ? supabase.from("credential_audit_events").select("id,employee_id,device_id,command_id,action,status,trace_id,sanitized_error,created_at").in("employee_id", ids).order("created_at", { ascending: false }).limit(200) : Promise.resolve({ data: [], error: null }),
-        supabase.from("device_commands")
-          .select("id,status,payload,command_type,device_id,employee_id,error_message,error_code,resolution_status,created_at,devices:device_id(name)")
-          .eq("status", "failed").eq("resolution_status", "active")
-          .order("created_at", { ascending: false }).limit(50)
+        invokeEdge<{ commands: Row[] }>("admin-employees", { action: "list_active_credential_failures" })
+          .then((result) => ({ data: result.commands, error: null }))
       ]);
       for (const result of [assignments, credentials, audits, commands]) if (result.error) throw result.error;
       return { people: peopleResult.data ?? [], total: peopleResult.count ?? 0, assignments: assignments.data ?? [],

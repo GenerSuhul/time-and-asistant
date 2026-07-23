@@ -78,6 +78,8 @@ type CrudPageProps = {
   realtimeTables?: string[];
   headerActions?: ReactNode;
   renderRowActions?: (row: Row) => ReactNode;
+  readOnly?: boolean;
+  readOnlyMessage?: string;
 };
 
 type Row = Record<string, unknown> & { id: string };
@@ -120,7 +122,7 @@ async function readFunctionError(error: unknown) {
   return fallback;
 }
 
-export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select, mutationFunction, mutationPayloadKey = "device", realtimeTables = [table], headerActions, renderRowActions }: CrudPageProps) {
+export function CrudPage({ title, table, columns, fields, orderBy = "created_at", select, mutationFunction, mutationPayloadKey = "device", realtimeTables = [table], headerActions, renderRowActions, readOnly = false, readOnlyMessage }: CrudPageProps) {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const incomingSearch = searchParams.get("search") ?? "";
@@ -279,12 +281,13 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
           <IconButton onClick={() => query.refetch()} aria-label="refrescar">
             <RefreshIcon />
           </IconButton>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={startCreate}>
+          {!readOnly && <Button variant="contained" startIcon={<AddIcon />} onClick={startCreate}>
             Nuevo
-          </Button>
+          </Button>}
         </Stack>
       </Stack>
 
+      {readOnly && readOnlyMessage && <Alert severity="info">{readOnlyMessage}</Alert>}
       <TextField
         size="small"
         label="Filtro"
@@ -310,7 +313,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
               {columns.map((column) => (
                 <TableCell key={column.name}>{column.label}</TableCell>
               ))}
-              <TableCell align="right">Acciones</TableCell>
+              {!readOnly && <TableCell align="right">Acciones</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -321,7 +324,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
                     {column.status ? <StatusChip value={cellValue(row, column.name)} /> : columnValue(row, column)}
                   </TableCell>
                 ))}
-                <TableCell align="right">
+                {!readOnly && <TableCell align="right">
                   {renderRowActions?.(row)}
                   <IconButton size="small" onClick={() => startEdit(row)} aria-label="editar">
                     <EditIcon fontSize="small" />
@@ -329,7 +332,7 @@ export function CrudPage({ title, table, columns, fields, orderBy = "created_at"
                   <IconButton size="small" color="error" onClick={() => remove.mutate(row.id)} aria-label="eliminar">
                     <DeleteIcon fontSize="small" />
                   </IconButton>
-                </TableCell>
+                </TableCell>}
               </TableRow>
             ))}
           </TableBody>

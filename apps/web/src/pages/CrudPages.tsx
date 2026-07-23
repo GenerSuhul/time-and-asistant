@@ -1,4 +1,6 @@
 import { CrudPage, type CrudColumn, type CrudField } from "../components/CrudPage";
+import { useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
+import { canAccess } from "../lib/accessControl";
 import { EmployeeManagementPage } from "./EmployeeManagementPage";
 
 const companyFields: CrudField[] = [
@@ -97,7 +99,9 @@ export function EmployeesPage() {
 }
 
 export function DevicesPage() {
-  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name), device_branches(branch_id,branches:branch_id(name))" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_branches", "device_status_logs"]} columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Principal" }, { name: "device_branches.branches.name", label: "Sucursales asignadas" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Última conexión (Guatemala)", dateTime: true }])} />;
+  const currentUser = useCurrentUserProfile();
+  const canAdministerDevices = canAccess((currentUser.data?.roles ?? []).map((role) => role.key), "device_admin");
+  return <CrudPage title="Dispositivos" table="devices" select="*, branches:branch_id(name), device_branches(branch_id,branches:branch_id(name))" fields={deviceFields} mutationFunction="admin-devices" realtimeTables={["devices", "device_branches", "device_status_logs"]} readOnly={!canAdministerDevices} readOnlyMessage="RRHH puede consultar equipos y asignarlos desde Personas. El alta técnica y la reprovisión del dispositivo corresponden a IT." columns={baseColumns([{ name: "name", label: "Device Name" }, { name: "branches.name", label: "Principal" }, { name: "device_branches.branches.name", label: "Sucursales asignadas" }, { name: "device_identifier", label: "Device ID" }, { name: "status", label: "Estado", status: true }, { name: "last_seen_at", label: "Última conexión (Guatemala)", dateTime: true }])} />;
 }
 
 export function EmployeeDevicesPage() {

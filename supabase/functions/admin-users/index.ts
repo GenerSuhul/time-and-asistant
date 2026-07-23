@@ -9,7 +9,7 @@ const baseUserSchema = z.object({
   status: z.enum(["active", "inactive", "suspended"]).default("active"),
   company_id: z.string().uuid().nullable().optional(),
   role_company_id: z.string().uuid().nullable().optional(),
-  role_ids: z.array(z.string().uuid()).min(1)
+  role_ids: z.array(z.string().uuid()).length(1)
 });
 
 const schema = z.discriminatedUnion("action", [
@@ -31,34 +31,35 @@ function errorMessage(error: unknown) {
 }
 
 async function assertRolesExist(supabase: ReturnType<typeof serviceClient>, roleIds: string[]) {
-  const { data, error } = await supabase.from("roles").select("id").in("id", roleIds);
+  const { data, error } = await supabase.from("roles").select("id,key")
+    .in("id", roleIds).in("key", ["it_admin", "hr_admin"]);
   if (error) throw error;
   if ((data ?? []).length !== new Set(roleIds).size) {
-    throw new Error("Uno o mas roles seleccionados no existen en la base de datos");
+    throw new Error("Solo se pueden asignar los roles IT o RRHH.");
   }
 }
 
-async function assertDoesNotRemoveLastSuperAdmin(
+async function assertDoesNotRemoveLastItAdmin(
   supabase: ReturnType<typeof serviceClient>,
   userId: string,
   roleIds: string[]
 ) {
-  const { data: superAdminRole, error: roleError } = await supabase
+  const { data: itAdminRole, error: roleError } = await supabase
     .from("roles")
     .select("id")
-    .eq("key", "super_admin")
+    .eq("key", "it_admin")
     .single();
   if (roleError) throw roleError;
-  if (roleIds.includes(superAdminRole.id)) return;
+  if (roleIds.includes(itAdminRole.id)) return;
 
   const { count, error } = await supabase
     .from("user_roles")
     .select("id", { count: "exact", head: true })
-    .eq("role_id", superAdminRole.id)
+    .eq("role_id", itAdminRole.id)
     .neq("user_id", userId);
   if (error) throw error;
   if ((count ?? 0) === 0) {
-    throw new Error("No puedes quitar el ultimo Super Admin del sistema.");
+    throw new Error("No puedes quitar el último usuario con rol IT.");
   }
 }
 
@@ -121,7 +122,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ user_id: created.user.id }, 201);
     }
 
-    await assertDoesNotRemoveLastSuperAdmin(supabase, payload.user_id, payload.role_ids);
+    await assertDoesNotRemoveLastItAdmin(supabase, payload.user_id, payload.role_ids);
 
     const { error: authError } = await supabase.auth.admin.updateUserById(payload.user_id, {
       email: payload.email,

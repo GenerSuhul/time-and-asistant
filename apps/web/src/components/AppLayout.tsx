@@ -40,6 +40,7 @@ import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
 import { NavLink, useNavigate } from "react-router-dom";
 import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
 import { useSession } from "../hooks/useSession";
+import { canAccess, type AppPermission } from "../lib/accessControl";
 import { supabase } from "../lib/supabase";
 
 const desktopDrawerWidth = 96;
@@ -49,27 +50,27 @@ const sidebarPreferenceKey = "attendance.sidebar.expanded";
 
 const navSections = [
   [
-    { label: "Dashboard", to: "/", icon: <DashboardIcon /> },
-    { label: "Empresas", to: "/companies", icon: <ApartmentIcon /> },
-    { label: "Sucursales", to: "/branches", icon: <ApartmentIcon /> },
-    { label: "Departamentos", to: "/departments", icon: <GroupsIcon /> },
-    { label: "Horarios", to: "/work-schedules", icon: <EventIcon /> }
+    { label: "Dashboard", to: "/", permission: "dashboard" as AppPermission, icon: <DashboardIcon /> },
+    { label: "Empresas", to: "/companies", permission: "companies" as AppPermission, icon: <ApartmentIcon /> },
+    { label: "Sucursales", to: "/branches", permission: "branches" as AppPermission, icon: <ApartmentIcon /> },
+    { label: "Departamentos", to: "/departments", permission: "departments" as AppPermission, icon: <GroupsIcon /> },
+    { label: "Horarios", to: "/work-schedules", permission: "work_schedules" as AppPermission, icon: <EventIcon /> }
   ],
   [
-    { label: "Empleados", to: "/employees", icon: <BadgeIcon /> },
-    { label: "Dispositivos", to: "/devices", icon: <DevicesIcon /> },
-    { label: "Asignaciones", to: "/employee-devices", icon: <GroupsIcon /> },
-    { label: "Comandos", to: "/commands", icon: <TuneIcon /> },
-    { label: "Eventos en vivo", to: "/live-events", icon: <HistoryIcon /> }
+    { label: "Empleados", to: "/employees", permission: "employees" as AppPermission, icon: <BadgeIcon /> },
+    { label: "Dispositivos", to: "/devices", permission: "devices" as AppPermission, icon: <DevicesIcon /> },
+    { label: "Asignaciones", to: "/employee-devices", permission: "employee_devices" as AppPermission, icon: <GroupsIcon /> },
+    { label: "Comandos", to: "/commands", permission: "commands" as AppPermission, icon: <TuneIcon /> },
+    { label: "Eventos en vivo", to: "/live-events", permission: "live_events" as AppPermission, icon: <HistoryIcon /> }
   ],
   [
-    { label: "Usuarios y roles", to: "/users", icon: <ManageAccountsIcon /> },
-    { label: "Reporte diario", to: "/daily-report", icon: <FactCheckIcon /> },
-    { label: "Reporte rango", to: "/range-report", icon: <FactCheckIcon /> },
-    { label: "Reportes automáticos", to: "/attendance-report-automation", icon: <EventIcon /> },
-    { label: "Ajustes manuales", to: "/manual-adjustments", icon: <TuneIcon /> },
-    { label: "Auditoria", to: "/audit", icon: <HistoryIcon /> },
-    { label: "Configuracion", to: "/settings", icon: <SettingsIcon /> }
+    { label: "Usuarios y roles", to: "/users", permission: "users" as AppPermission, icon: <ManageAccountsIcon /> },
+    { label: "Reporte diario", to: "/daily-report", permission: "daily_report" as AppPermission, icon: <FactCheckIcon /> },
+    { label: "Reporte rango", to: "/range-report", permission: "range_report" as AppPermission, icon: <FactCheckIcon /> },
+    { label: "Reportes automáticos", to: "/attendance-report-automation", permission: "attendance_report_automation" as AppPermission, icon: <EventIcon /> },
+    { label: "Ajustes manuales", to: "/manual-adjustments", permission: "manual_adjustments" as AppPermission, icon: <TuneIcon /> },
+    { label: "Auditoria", to: "/audit", permission: "audit" as AppPermission, icon: <HistoryIcon /> },
+    { label: "Mi perfil", to: "/settings", permission: "settings" as AppPermission, icon: <SettingsIcon /> }
   ]
 ];
 
@@ -88,6 +89,7 @@ export function AppLayout({ children }: PropsWithChildren) {
   const currentUser = useCurrentUserProfile();
   const currentName = displayName(currentUser.data);
   const currentEmail = currentUser.data?.profile?.email ?? session?.user.email ?? "Sesion activa";
+  const roleKeys = (currentUser.data?.roles ?? []).map((role) => role.key);
   const desktopExpanded = desktopPinnedExpanded || desktopPreviewExpanded;
   const isExpanded = !isDesktop || desktopExpanded;
   const activeDesktopWidth = desktopPinnedExpanded ? desktopExpandedDrawerWidth : desktopDrawerWidth;
@@ -173,7 +175,7 @@ export function AppLayout({ children }: PropsWithChildren) {
       </Stack>
       <Divider />
       <Stack component="nav" spacing={2} sx={{ flex: 1, overflowY: "auto", px: isDesktop ? 1.25 : 1.5, py: 2 }}>
-        {navSections.map((section, sectionIndex) => (
+        {navSections.map((section) => section.filter((item) => canAccess(roleKeys, item.permission))).filter((section) => section.length).map((section, sectionIndex) => (
           <List key={sectionIndex} dense disablePadding sx={{ display: "grid", gap: 0.5 }}>
             {section.map((item) => {
               const button = (

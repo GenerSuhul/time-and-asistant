@@ -96,11 +96,8 @@ function normalizeRole(value: Role | Role[] | null) {
 
 function roleDescription(roleKey: string) {
   const descriptions: Record<string, string> = {
-    super_admin: "Acceso completo al sistema, usuarios y configuracion.",
-    it_admin: "Administracion tecnica, dispositivos, comandos y gateway.",
-    hr_admin: "Gestion de empleados, asistencia y reportes.",
-    branch_manager: "Visibilidad operativa por sucursal.",
-    viewer: "Solo lectura."
+    it_admin: "Acceso completo a todos los módulos y configuraciones.",
+    hr_admin: "Personas, horarios, asignaciones, credenciales, asistencia y reportes."
   };
   return descriptions[roleKey] ?? "Rol operativo del sistema.";
 }
@@ -120,7 +117,7 @@ export function UsersPage() {
     queryFn: async () => {
       const [profilesResult, rolesResult, companiesResult, assignmentsResult] = await Promise.all([
         supabase.from("profiles").select("id,email,full_name,status,company_id,companies:company_id(id,name)").order("created_at", { ascending: false }),
-        supabase.from("roles").select("id,key,name,description").order("name", { ascending: true }),
+        supabase.from("roles").select("id,key,name,description").in("key", ["it_admin", "hr_admin"]).order("name", { ascending: true }),
         supabase.from("companies").select("id,name").order("name", { ascending: true }),
         supabase.from("user_roles").select("id,user_id,company_id,roles:role_id(id,key,name,description),companies:company_id(id,name)").order("created_at", { ascending: true })
       ]);
@@ -222,9 +219,7 @@ export function UsersPage() {
   function toggleRole(roleId: string) {
     setForm((current) => ({
       ...current,
-      role_ids: current.role_ids.includes(roleId)
-        ? current.role_ids.filter((id) => id !== roleId)
-        : [...current.role_ids, roleId]
+      role_ids: current.role_ids.includes(roleId) ? [] : [roleId]
     }));
   }
 

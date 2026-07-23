@@ -29,6 +29,7 @@ const requestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("cancel_creation_session"), session_id: z.string().uuid(), reason: z.string().max(120).default("cancelled_by_user") }),
   z.object({ action: z.literal("sync_device_people"), device_id: z.string().uuid() }),
   z.object({ action: z.literal("sync_all_device_people") }),
+  z.object({ action: z.literal("list_active_credential_failures") }),
   z.object({ action: z.literal("enroll_fingerprint"), employee_id: z.string().uuid(), device_id: z.string().uuid(), finger_no: z.number().int().min(1).max(10).default(1) }),
   z.object({ action: z.literal("verify_employee_credentials"), employee_id: z.string().uuid(), device_ids: z.array(z.string().uuid()).max(200).optional() }),
   z.object({ action: z.literal("repair_employee_credentials"), employee_id: z.string().uuid(), device_ids: z.array(z.string().uuid()).max(200).optional() }),
@@ -66,6 +67,29 @@ Deno.serve(async (req) => {
 
     const actor = await requireRole(req, supabase, ["super_admin", "it_admin", "hr_admin"]);
     if (actor.type !== "user") throw new EdgeError("USER_REQUIRED", "Se requiere un usuario autenticado.", 401);
+
+    if (input.action === "list_active_credential_failures") {
+      const { data, error } = await supabase.from("device_commands")
+        .select("id,status,command_type,device_id,employee_id,error_message,error_code,resolution_status,created_at,payload,devices:device_id(name)")
+        .eq("status", "failed").eq("resolution_status", "active")
+        .not("employee_id", "is", null)
+        .in("command_type", employeeCredentialCommandTypes)
+        .order("created_at", { ascending: false }).limit(50);
+      if (error) throw error;
+      return jsonResponse({ commands: (data ?? []).map((command: any) => ({
+        id: command.id,
+        status: command.status,
+        command_type: command.command_type,
+        device_id: command.device_id,
+        employee_id: command.employee_id,
+        error_message: command.error_message,
+        error_code: command.error_code,
+        resolution_status: command.resolution_status,
+        created_at: command.created_at,
+        payload: { trace_id: command.payload?.trace_id ?? command.id },
+        devices: command.devices
+      })) });
+    }
 
     if (input.action === "stage_fingerprint") {
       const { device_ids: _devices, metadata, ...draft } = input.employee;
@@ -148,7 +172,9 @@ Deno.serve(async (req) => {
     }
     if (input.action === "retry_failed_commands") {
       let request = supabase.from("device_commands").select("id")
-        .eq("status", "failed").eq("resolution_status", "active");
+        .eq("status", "failed").eq("resolution_status", "active")
+        .not("employee_id", "is", null)
+        .in("command_type", employeeCredentialCommandTypes);
       if (input.command_ids?.length) request = request.in("id", [...new Set(input.command_ids)]);
       const { data: failed, error: failedError } = await request.limit(100);
       if (failedError) throw failedError;
@@ -303,6 +329,9 @@ async function resolveVerifiedCommand(supabase: any, commandId: string) {
   const { data: command, error } = await supabase.from("device_commands")
     .select("id,device_id,employee_id,command_type,status,created_at").eq("id", commandId).single();
   if (error) throw error;
+  if (!command.employee_id || !employeeCredentialCommandTypes.includes(command.command_type)) {
+    throw new EdgeError("COMMAND_OUTSIDE_EMPLOYEE_CREDENTIAL_SCOPE", "Este comando solo puede administrarse desde el módulo técnico.", 403);
+  }
   if (command.status !== "failed") throw new EdgeError("COMMAND_NOT_FAILED", "Solo se resuelven comandos fallidos.", 409);
   let verified = false;
   if (command.employee_id) {
@@ -341,3 +370,16 @@ function sanitizeMetadataValue(value: unknown): unknown {
   return typeof value === "string" ? value.slice(0, 1000) : value;
 }
 function relation(value: any) { return Array.isArray(value) ? value[0] : value; }
+
+const employeeCredentialCommandTypes = [
+  "sync_person",
+  "update_person",
+  "delete_person",
+  "sync_card",
+  "delete_card",
+  "sync_face",
+  "delete_face",
+  "enroll_fingerprint",
+  "delete_fingerprint",
+  "sync_device_people"
+];
