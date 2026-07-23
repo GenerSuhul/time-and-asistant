@@ -51,7 +51,7 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 
 | Operation | Method and exact installed path | Validation |
 |---|---|---|
-| Get device information | `GET /ISAPI/System/deviceInfo?format=json&devIndex=<uuid>` | Read-validated on both devices. Models DS-K1T320MFWX and DS-K1T320MFX. |
+| Get device information | `GET /ISAPI/System/deviceInfo?format=json&devIndex=<uuid>` | Read-validated in production, including Ixcán model DS-K1T321MFWX firmware V3.9.3 build 240701. |
 | Set device information | `PUT /ISAPI/System/deviceInfo?format=json&devIndex=<uuid>` | Catalog-confirmed; not executed. |
 | Get time | `GET /ISAPI/System/time?format=json&devIndex=<uuid>` | Read-validated; devices return UTC-06:00. |
 | Set time | `PUT /ISAPI/System/time?format=json&devIndex=<uuid>` | `Time.localTime`, `Time.timeMode`; catalog-confirmed, not executed. |
@@ -77,7 +77,16 @@ New device assignments enqueue a credential repair only after their person/card
 provisioning dependency succeeds. The repair compares person, local device role,
 card and fingerprint count with their canonical employee values. A verified
 source fingerprint is transferred in memory automatically; deterministic vendor
-limitations remain active per-device incidents and are not re-enqueued.
+limitations use a per-device target recorded from production observation. The
+canonical employee count is preserved, the reachable device state is verified,
+and the historical incident is retained as resolved rather than re-enqueued.
+
+For Ixcán, repeated attempts to write fingerprint IDs 1 and 2 left only ID 2
+available on re-read. Its metadata therefore declares
+`credential_capabilities.max_fingerprints_per_person=1`, scoped only to that
+device/model/firmware observation. Reconciliation reports the one usable
+template as synchronized with a device limitation and does not claim that both
+canonical templates exist there.
 
 ## Audit of current RenovaGT implementation
 

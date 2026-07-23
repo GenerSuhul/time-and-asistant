@@ -113,8 +113,10 @@ async function replicateFingerprint(command: DeviceCommand, destination: DeviceR
   const requestedFingerNos = Array.isArray(command.payload.finger_nos)
     ? command.payload.finger_nos.map(Number)
     : [Number(command.payload.finger_no)];
-  const fingerNos = [...new Set(requestedFingerNos)]
+  const supportedFingerNos = [...new Set(requestedFingerNos)]
     .filter((value) => Number.isInteger(value) && value >= 1 && value <= 10);
+  const maxFingerprints = deviceFingerprintTargetCount(supportedFingerNos.length, destination);
+  const fingerNos = supportedFingerNos.slice(0, maxFingerprints);
   const fingerNo = fingerNos[0];
   const sourceDeviceId = String(command.payload.source_device_id ?? "");
   if (!command.employee_id) throw new Error("employee_id is required for fingerprint replication");
@@ -200,7 +202,8 @@ async function reconcileEmployeeSnapshot(command: DeviceCommand, device: DeviceR
     && snapshot.person?.localUIRight === Boolean(employee.hikvision_is_admin);
   const expectedCard = String(employee.card_number ?? "").trim();
   const cardMatches = expectedCard ? snapshot.cardNumbers.includes(expectedCard) : snapshot.cardNumbers.length === 0;
-  const expectedFingerprintCount = Number(employee.fingerprint_count ?? 0);
+  const canonicalFingerprintCount = Number(employee.fingerprint_count ?? 0);
+  const expectedFingerprintCount = deviceFingerprintTargetCount(canonicalFingerprintCount, device);
   const fingerprintMatches = expectedFingerprintCount === 0
     ? snapshot.fingerprintCount === 0
     : snapshot.fingerprintCount >= expectedFingerprintCount;
@@ -226,8 +229,13 @@ async function reconcileEmployeeSnapshot(command: DeviceCommand, device: DeviceR
       : `HIKVISION_FINGERPRINT_COUNT_MISMATCH: expected ${expectedFingerprintCount}; actual ${snapshot.fingerprintCount}`,
     snapshot.fingerprintCount, {
       ...verifiedAtMetadata,
+      canonical_count: canonicalFingerprintCount,
       expected_count: expectedFingerprintCount,
-      actual_count: snapshot.fingerprintCount
+      device_target_count: expectedFingerprintCount,
+      actual_count: snapshot.fingerprintCount,
+      device_limited: expectedFingerprintCount < canonicalFingerprintCount,
+      limitation: expectedFingerprintCount < canonicalFingerprintCount
+        ? "Este equipo conserva una huella por persona mediante la API instalada." : null
     });
   await recordCredentialState(command.employee_id, device.id, "face",
     snapshot.faceCount > 0 ? "synced" : "none",
@@ -288,7 +296,10 @@ async function enqueueCredentialRepairs(command: DeviceCommand, device: DeviceRe
     if (queued) jobs.push(queued);
   }
 
-  if (snapshot.fingerprintCount < Number(employee.fingerprint_count ?? 0)) {
+  const targetFingerprintCount = deviceFingerprintTargetCount(
+    Number(employee.fingerprint_count ?? 0), device
+  );
+  if (snapshot.fingerprintCount < targetFingerprintCount) {
     const { data: deterministicFailure, error: deterministicFailureError } = await supabase.from("device_commands")
       .select("id,error_code").eq("employee_id", command.employee_id).eq("device_id", device.id)
       .eq("command_type", "enroll_fingerprint").eq("status", "failed")
@@ -324,9 +335,12 @@ async function enqueueCredentialRepairs(command: DeviceCommand, device: DeviceRe
       const auditedFingerNos = [...new Set((audits ?? [])
         .map((item: any) => Number(item.metadata?.finger_no))
         .filter((value: number) => Number.isInteger(value) && value >= 1 && value <= 10))];
-      const fingerNos = auditedFingerNos.length
+      const candidateFingerNos = auditedFingerNos.length
         ? auditedFingerNos
         : Array.from({ length: Math.min(10, Number(source.verified_count)) }, (_, index) => index + 1);
+      const fingerNos = candidateFingerNos
+        .sort((left, right) => left - right)
+        .slice(0, targetFingerprintCount);
       for (const fingerNo of fingerNos) {
         if (!Number.isInteger(fingerNo)) throw new Error("HIKVISION_FINGER_NO_INVALID");
       }
@@ -469,6 +483,17 @@ async function importPeople(device: DeviceRecord & { branch_id?: string | null }
 
 const safeCount = (value: unknown) => Math.max(0, Number.isFinite(Number(value)) ? Number(value) : 0);
 const relation = (value: any) => Array.isArray(value) ? value[0] : value;
+
+function deviceFingerprintTargetCount(canonicalCount: number, device: DeviceRecord) {
+  const configuredLimit = Number(
+    (device.metadata?.credential_capabilities as Record<string, unknown> | undefined)
+      ?.max_fingerprints_per_person
+  );
+  if (!Number.isInteger(configuredLimit) || configuredLimit < 1 || configuredLimit > 10) {
+    return canonicalCount;
+  }
+  return Math.min(canonicalCount, configuredLimit);
+}
 
 async function reconcileMissingDeviceAssignments(device: DeviceRecord, command: DeviceCommand, observedEmployeeNos: Set<string>) {
   const { data: links, error } = await supabase.from("employee_devices")
@@ -825,7 +850,7 @@ async function recordCommandCredentialState(command: any, status: string, lastEr
     command.id, traceIdFor(command), lastError, verifiedCount,
     credentialType === "fingerprint" ? {
       finger_no: Number(command.payload?.finger_no ?? 1),
-      finger_nos: command.payload?.finger_nos,
+      finger_nos: fingerprintResult?.fingerNos ?? command.payload?.finger_nos,
       verified_finger_nos: fingerprintResult?.verifiedFingerNos,
       source_device_id: fingerprintResult?.sourceDeviceId,
       mode: command.payload?.mode

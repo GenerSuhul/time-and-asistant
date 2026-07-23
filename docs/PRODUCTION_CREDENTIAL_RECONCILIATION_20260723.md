@@ -37,7 +37,8 @@ assigned devices. Card count is zero and face count is zero on every device.
 - Ixcán (`DS-K1T321MFWX`, firmware `V3.9.3 build 240701`): 1 fingerprint.
   Loading IDs 1 and 2 leaves only ID 2. The batch verifier reports
   `HIKVISION_FINGERPRINT_REPLICATION_PARTIAL` with requested `1,2` and verified
-  `2`; it is the only active credential alert.
+  `2`. Repeated production tests established this as a device/API-combination
+  limit, not a transient retry condition.
 
 The employee-level `fingerprint_count=2` is now the maximum verified count on a
 physical device, not a sum and not an assumed count for every assignment.
@@ -74,8 +75,10 @@ administrator flag on these terminals. Role truth is tracked independently as
 - Katherine Ruiz (`employeeNo 3156528012`) is physically confirmed with
   fingerprint IDs 1 and 2 on `AC_TESTING` after backend-only replication from
   Poptún 1.
-- Ixcán remains a single truthful partial fingerprint incident: 1 of 2
-  templates. The deterministic blocker prevents repeated automatic retries.
+- Ixcán is truthfully represented as a device-limited state: 1 verified and
+  usable fingerprint of the employee's 2 canonical templates. The historical
+  partial-replication incident is resolved and retained for audit; it is not
+  retried or displayed as an active failure.
 - Person/role successes can resolve only person/role incidents; they can no
   longer supersede fingerprint failures.
 
@@ -84,3 +87,24 @@ Follow-up traces:
 - Gener role repair: `4bb24d2e-750f-4e37-b5e4-4f5684810e6f`
 - Katherine assignment repair: `e0d9ecfc-1364-418e-baa5-b69cdebe3fc1`
 - Final device verification: `861d3397-d92f-4925-b839-e0d3647d2aaa`
+- Ixcán capacity-aware verification: `5bd7cbdf-b1e3-4a94-82fb-06defcf23471`
+
+## Ixcán incident resolution and operator UX
+
+Migration `202607230032_ixcan_fingerprint_api_capacity.sql` records the
+observed per-person remote provisioning target only in the Ixcán device
+metadata. Reconciliation compares this device against one fingerprint while
+preserving the employee's canonical count of two. The credential remains
+yellow/informational in the UI, with a clear explanation that one verified
+fingerprint is operational; it is never presented as two synchronized
+templates.
+
+The command history retains the original vendor code, full job UUID and trace
+UUID for support and audit. Operator-facing screens translate the command and
+known failures into Spanish and expose only a short technical reference in the
+normal layout. Full identifiers remain available in a tooltip.
+
+After deploying the capacity-aware worker, a live DeviceGateway reconciliation
+completed successfully on `AC_RNV_IXCAN`: person synchronized, administrator
+role confirmed, card not configured, one fingerprint verified, no credential
+error, and zero active failed device commands system-wide.

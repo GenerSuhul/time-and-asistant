@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Button, LinearProgress, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { StatusChip } from "../components/StatusChip";
+import { deviceCommandErrorMessage, deviceCommandLabel } from "../lib/deviceCommandMessages";
 import { supabase } from "../lib/supabase";
 
 const commandTypes = ["sync_device_people", "sync_person", "update_person", "delete_person", "sync_card", "delete_card", "delete_face", "delete_fingerprint", "remote_door", "sync_permission_schedule", "fetch_events", "reboot", "sync_time"];
@@ -58,7 +59,7 @@ export function DeviceCommandsPage() {
             ))}
           </TextField>
           <TextField select size="small" label="Comando" value={commandType} onChange={(event) => setCommandType(event.target.value)} sx={{ minWidth: 220 }}>
-            {commandTypes.map((type) => <MenuItem key={type} value={type}>{type}</MenuItem>)}
+            {commandTypes.map((type) => <MenuItem key={type} value={type}>{deviceCommandLabel(type)}</MenuItem>)}
           </TextField>
           <TextField size="small" label="Payload JSON" value={payload} onChange={(event) => setPayload(event.target.value)} sx={{ minWidth: 280 }} />
           <Button variant="contained" onClick={() => createCommand.mutate()} disabled={!deviceId || createCommand.isPending}>Crear</Button>
@@ -82,10 +83,10 @@ export function DeviceCommandsPage() {
               <TableRow key={command.id} hover>
                 <TableCell>{command.created_at}</TableCell>
                 <TableCell>{command.devices?.name ?? command.device_id}</TableCell>
-                <TableCell>{command.command_type}</TableCell>
+                <TableCell>{deviceCommandLabel(command.command_type)}</TableCell>
                 <TableCell><StatusChip value={command.status} /></TableCell>
                 <TableCell>{command.attempts}</TableCell>
-                <TableCell>{command.error_message ?? ""}</TableCell>
+                <TableCell>{command.error_message ? deviceCommandErrorMessage(command) : ""}</TableCell>
               </TableRow>
             ))}
           </TableBody>
