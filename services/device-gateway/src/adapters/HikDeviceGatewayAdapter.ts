@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayEventPayload } from "@attendance/shared";
 import { config } from "../config.js";
-import type { DeviceAdapter, DeviceCommand, DeviceRecord, FingerprintEnrollmentResult, HistoryFetchOptions } from "./DeviceAdapter.js";
+import type {
+  DeviceAdapter, DeviceCommand, DeviceRecord, EmployeeCredentialSnapshot,
+  FingerprintEnrollmentResult, FingerprintTemplate, HistoryFetchOptions
+} from "./DeviceAdapter.js";
 import { HikDeviceGatewayClient } from "./HikDeviceGatewayClient.js";
 
 export class HikDeviceGatewayAdapter implements DeviceAdapter {
@@ -75,21 +78,14 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     const fingerData = findFingerData(captured);
     if (!fingerData) throw new Error("DeviceGateway did not return a fingerprint template");
     try {
-      await this.call("/ISAPI/AccessControl/FingerPrintDownload", "POST", {
-        FingerPrintCfg: { employeeNo, fingerPrintID: fingerNo, fingerData }
-      });
+      const verifiedCount = await this.addFingerprintTemplate(employeeNo, fingerNo, { fingerData, fingerType: "normalFP" });
+      return {
+        credentialType: "fingerprint", fingerNo, verifiedCount, materialization: "captured",
+        operations: ["CaptureFingerPrint", "FingerPrintDownload", "AddFingerPrint"]
+      } satisfies FingerprintEnrollmentResult;
     } finally {
       // The template is never persisted or logged and becomes unreachable here.
     }
-    const person = await this.searchPerson(employeeNo);
-    const verifiedCount = Number(person?.numOfFP ?? person?.fingerPrintNum ?? person?.fingerprintCount ?? 0);
-    if (!person || !Number.isInteger(verifiedCount) || verifiedCount < 1) {
-      throw new Error("HIKVISION_FINGERPRINT_NOT_VERIFIED: DeviceGateway did not confirm the fingerprint after download");
-    }
-    return {
-      credentialType: "fingerprint", fingerNo, verifiedCount,
-      operations: ["CaptureFingerPrint", "FingerPrintDownload", "AddFingerPrint"]
-    } satisfies FingerprintEnrollmentResult;
   }
   async uploadFingerprintTemplate(_command: DeviceCommand) { throw new Error("Raw fingerprint templates are not accepted by this gateway"); }
   async deleteFingerprint(command: DeviceCommand) {
@@ -98,6 +94,57 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
   }
   async assignCard(command: DeviceCommand) { await this.syncCard(command); }
   async assignPin(_command: DeviceCommand) { throw new Error("PIN synchronization is not exposed by the installed DeviceGateway API catalog"); }
+
+  async inspectEmployeeCredentials(employeeNo: string): Promise<EmployeeCredentialSnapshot> {
+    validateNumericEmployeeNo(employeeNo);
+    const person = await this.searchPerson(employeeNo);
+    if (!person) return { person: null, cardNumbers: [], fingerprintCount: 0, faceCount: 0 };
+    const cardNumbers = await this.searchCards(employeeNo);
+    return {
+      person: {
+        employeeNo: String(person.employeeNo ?? person.employeeNoString ?? employeeNo),
+        name: String(person.name ?? "")
+      },
+      cardNumbers,
+      fingerprintCount: safeCount(person.numOfFP ?? person.fingerPrintNum ?? person.fingerprintCount),
+      faceCount: safeCount(person.numOfFace ?? person.faceNum ?? person.faceCount)
+    };
+  }
+
+  async downloadFingerprintTemplate(employeeNo: string, fingerNo: number): Promise<FingerprintTemplate> {
+    validateNumericEmployeeNo(employeeNo);
+    validateFingerNo(fingerNo);
+    const response = await this.call("/ISAPI/AccessControl/FingerPrintUpload", "POST", {
+      FingerPrintCond: { searchID: randomUUID(), employeeNo, fingerPrintID: fingerNo }
+    }) as Record<string, any>;
+    const root = response.FingerPrintInfo ?? response;
+    const list = root.FingerPrintList ?? [];
+    const records = Array.isArray(list) ? list : [list];
+    const match = records.find((item) => Number(item?.fingerPrintID) === fingerNo) ?? records[0];
+    const fingerData = findFingerData(match);
+    if (root.status === "NoFP" || !fingerData) {
+      throw new Error(`HIKVISION_FINGERPRINT_NOT_FOUND: finger ${fingerNo} is not present on source device`);
+    }
+    return { fingerData, fingerType: String(match?.fingerType ?? "normalFP") };
+  }
+
+  async addFingerprintTemplate(employeeNo: string, fingerNo: number, template: FingerprintTemplate) {
+    validateNumericEmployeeNo(employeeNo);
+    validateFingerNo(fingerNo);
+    if (!template.fingerData) throw new Error("HIKVISION_FINGERPRINT_TEMPLATE_REQUIRED");
+    await this.call("/ISAPI/AccessControl/FingerPrintDownload", "POST", {
+      FingerPrintCfg: {
+        employeeNo, fingerPrintID: fingerNo, fingerData: template.fingerData,
+        fingerType: template.fingerType || "normalFP"
+      }
+    });
+    const person = await this.searchPerson(employeeNo);
+    const verifiedCount = safeCount(person?.numOfFP ?? person?.fingerPrintNum ?? person?.fingerprintCount);
+    if (!person || verifiedCount < 1) {
+      throw new Error("HIKVISION_FINGERPRINT_NOT_VERIFIED: DeviceGateway did not confirm the fingerprint after download");
+    }
+    return verifiedCount;
+  }
 
   async fetchHistoricalEvents(commandOrOptions: DeviceCommand | HistoryFetchOptions): Promise<GatewayEventPayload[]> {
     const range = "payload" in commandOrOptions ? commandOrOptions.payload : commandOrOptions;
@@ -178,6 +225,20 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     const first = (Array.isArray(list) ? list : [list])[0];
     return first?.UserInfo ?? first ?? null;
   }
+
+  private async searchCards(employeeNo: string) {
+    const response = await this.call("/ISAPI/AccessControl/CardInfo/Search", "POST", {
+      CardInfoSearchCond: {
+        searchID: randomUUID(), searchResultPosition: 0, maxResults: 30,
+        EmployeeNoList: [{ employeeNo }]
+      }
+    }) as Record<string, any>;
+    const root = response.CardInfoSearch ?? response.CardInfoSearchResult ?? response;
+    const list = root.CardInfo ?? root.MatchList ?? [];
+    return (Array.isArray(list) ? list : [list])
+      .map((item) => String(item?.CardInfo?.cardNo ?? item?.cardNo ?? "").trim())
+      .filter(Boolean);
+  }
 }
 
 function formatGatewayDate(date: Date) {
@@ -210,8 +271,18 @@ function required(command: DeviceCommand, key: string) {
 }
 function numericEmployeeNo(command: DeviceCommand) {
   const value = required(command, "employee_no");
-  if (!/^\d+$/.test(value)) throw new Error("HIKVISION_EMPLOYEE_NO_INVALID: employee_no must contain only digits");
+  validateNumericEmployeeNo(value);
   return value;
+}
+function validateNumericEmployeeNo(value: string) {
+  if (!/^\d+$/.test(value)) throw new Error("HIKVISION_EMPLOYEE_NO_INVALID: employee_no must contain only digits");
+}
+function validateFingerNo(value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > 10) throw new Error("HIKVISION_FINGER_NO_INVALID");
+}
+function safeCount(value: unknown) {
+  const count = Number(value);
+  return Number.isInteger(count) && count > 0 ? count : 0;
 }
 function validity(command: DeviceCommand) {
   return { beginTime: String(command.payload.valid_from ?? "2020-01-01T00:00:00"), endTime: String(command.payload.valid_to ?? "2037-12-31T23:59:59") };

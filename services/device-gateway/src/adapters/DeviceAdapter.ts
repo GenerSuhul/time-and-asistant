@@ -13,6 +13,9 @@ export type DeviceRecord = {
 
 export type DeviceCommand = {
   id: string;
+  device_id?: string;
+  employee_id?: string | null;
+  requested_by?: string | null;
   command_type: string;
   payload: Record<string, unknown>;
 };
@@ -34,8 +37,27 @@ export type HistoryFetchOptions = {
 export type FingerprintEnrollmentResult = {
   credentialType: "fingerprint";
   fingerNo: number;
+  fingerNos?: number[];
+  verifiedFingerNos?: number[];
   verifiedCount: number;
-  operations: ["CaptureFingerPrint", "FingerPrintDownload", "AddFingerPrint"];
+  materialization: "captured" | "synced";
+  sourceDeviceId?: string;
+  operations: string[];
+};
+
+export type EmployeeCredentialSnapshot = {
+  person: {
+    employeeNo: string;
+    name: string;
+  } | null;
+  cardNumbers: string[];
+  fingerprintCount: number;
+  faceCount: number;
+};
+
+export type FingerprintTemplate = {
+  fingerData: string;
+  fingerType: string;
 };
 
 export interface DeviceAdapter {
@@ -54,4 +76,7 @@ export interface DeviceAdapter {
   fetchHistoricalEvents(commandOrOptions: DeviceCommand | HistoryFetchOptions): Promise<GatewayEventPayload[]>;
   rebootDevice(command: DeviceCommand): Promise<void>;
   syncTime(command: DeviceCommand): Promise<void>;
+  inspectEmployeeCredentials?(employeeNo: string): Promise<EmployeeCredentialSnapshot>;
+  downloadFingerprintTemplate?(employeeNo: string, fingerNo: number): Promise<FingerprintTemplate>;
+  addFingerprintTemplate?(employeeNo: string, fingerNo: number, template: FingerprintTemplate): Promise<number>;
 }

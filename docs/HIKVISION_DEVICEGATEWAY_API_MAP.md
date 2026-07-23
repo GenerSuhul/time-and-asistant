@@ -32,9 +32,11 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 | Delete person | `PUT /ISAPI/AccessControl/UserInfoDetail/Delete` | `UserInfoDetail.mode=byEmployeeNo`, `EmployeeNoList` | Catalog-confirmed; existing adapter matches. |
 | Search people | `POST /ISAPI/AccessControl/UserInfo/Search` | `UserInfoSearchCond` with stable `searchID`, zero-based `searchResultPosition`, `maxResults` | Read-validated with pagination: AD4776127 has 1 match; K43214566 reports 37 matches. |
 | Add card | `POST /ISAPI/AccessControl/CardInfo/Record` | `CardInfo.employeeNo`, `cardNo` | Catalog-confirmed; existing adapter matches. |
+| Search cards | `POST /ISAPI/AccessControl/CardInfo/Search` | `CardInfoSearchCond.EmployeeNoList` | Read-validated in production on 2026-07-23. Used for exact per-device reconciliation. |
 | Delete card | `PUT /ISAPI/AccessControl/CardInfo/Delete` | `CardInfoDelCond.CardNoList` | Catalog-confirmed; existing adapter matches. |
 | Capture fingerprint | `POST /ISAPI/AccessControl/CaptureFingerPrint` | `CaptureFingerPrintCond.fingerNo` | Catalog-confirmed; not executed. Response may contain raw template material. |
-| Add fingerprint | `POST /ISAPI/AccessControl/FingerPrintDownload` | `FingerPrintCfg.employeeNo`, `fingerPrintID`, **`fingerData`** | Catalog-confirmed; raw template storage is blocked. Passthrough only after controlled enrollment validation. |
+| Read fingerprint | `POST /ISAPI/AccessControl/FingerPrintUpload` | `FingerPrintCond.employeeNo`, `fingerPrintID` | Read-validated in production on 2026-07-23. The response is handled in memory and never logged or persisted. |
+| Add fingerprint | `POST /ISAPI/AccessControl/FingerPrintDownload` | `FingerPrintCfg.employeeNo`, `fingerPrintID`, **`fingerData`** | Production-validated for origin-to-destination in-memory passthrough. The installed vendor uses “Download” to mean download into the target device. |
 | Delete fingerprint | `PUT /ISAPI/AccessControl/FingerPrint/Delete` | `FingerPrintDelete.EmployeeNoDetail` | Catalog-confirmed; existing adapter matches. |
 | Search history event | `POST /ISAPI/AccessControl/AcsEvent` | `AcsEventCond.searchID`, `searchResultPosition`, `maxResults`, `major`, `minor`, `startTime`, `endTime` | Live-validated on both production devices. The installed gateway caps pages at 30 even when 100 is requested. |
 | Remote control door | `PUT /ISAPI/AccessControl/RemoteControl/door/<ID>` | `RemoteControlDoor.cmd` (`open` in installed example) | Catalog-confirmed; not executed during audit. |
@@ -69,7 +71,7 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 
 ## Biometric decision
 
-The installed Add Fingerprint API requires `fingerData`, which is a raw biometric template. RenovaGT will not persist it. Enrollment may proceed only as an in-memory capture-to-device passthrough with sanitized logs, a short timeout and explicit lifecycle state. If the installed gateway cannot complete that passthrough without returning the template to our process, the enrollment implementation remains blocked pending explicit approval of encryption, private Storage, RLS and retention controls.
+The installed API can read an existing template with `FingerPrintUpload` and add it to another device with `FingerPrintDownload`. RenovaGT performs this as a single backend-only in-memory transfer. Templates are never stored in Supabase, command payloads, audit rows, logs, frontend state or browser traffic. Every destination is re-read after transfer; a missing `fingerPrintID` is recorded as a partial failure instead of success.
 
 ## Audit of current RenovaGT implementation
 
