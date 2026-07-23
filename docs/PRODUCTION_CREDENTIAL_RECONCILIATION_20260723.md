@@ -56,3 +56,31 @@ physical device, not a sum and not an assumed count for every assignment.
 Each replication audit stores source device, destination device, employee,
 command, finger numbers, status and trace ID. It explicitly excludes biometric
 material.
+
+## Complete assignment and device role follow-up
+
+The assignment flow now automatically enqueues
+`repair_employee_credentials` after the last new-device person/card command.
+That repair provisions and verifies person, Hikvision local role, card and all
+known fingerprint IDs. Manual repair is no longer required after selecting a
+new destination.
+
+`employees.hikvision_is_admin` is the canonical device role.
+`true` maps to `UserInfo.localUIRight=true`; `userType=normal` is not the
+administrator flag on these terminals. Role truth is tracked independently as
+`employee_device_credentials.credential_type='role'`.
+
+- Gener is physically confirmed as administrator on 17/17 assigned devices.
+- Katherine Ruiz (`employeeNo 3156528012`) is physically confirmed with
+  fingerprint IDs 1 and 2 on `AC_TESTING` after backend-only replication from
+  Poptún 1.
+- Ixcán remains a single truthful partial fingerprint incident: 1 of 2
+  templates. The deterministic blocker prevents repeated automatic retries.
+- Person/role successes can resolve only person/role incidents; they can no
+  longer supersede fingerprint failures.
+
+Follow-up traces:
+
+- Gener role repair: `4bb24d2e-750f-4e37-b5e4-4f5684810e6f`
+- Katherine assignment repair: `e0d9ecfc-1364-418e-baa5-b69cdebe3fc1`
+- Final device verification: `861d3397-d92f-4925-b839-e0d3647d2aaa`

@@ -49,6 +49,8 @@ export type EmployeeCredentialSnapshot = {
   person: {
     employeeNo: string;
     name: string;
+    localUIRight: boolean;
+    userType: string;
   } | null;
   cardNumbers: string[];
   fingerprintCount: number;

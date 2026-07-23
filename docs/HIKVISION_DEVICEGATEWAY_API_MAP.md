@@ -27,8 +27,8 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 
 | Operation | Method and exact installed path | Request root | Validation |
 |---|---|---|---|
-| Add person | `POST /ISAPI/AccessControl/UserInfo/Record` | `UserInfo` array with `employeeNo`, `name`, `Valid.beginTime/endTime` | Catalog-confirmed; existing adapter matches. |
-| Edit person | `PUT /ISAPI/AccessControl/UserInfo/Modify` | Single `UserInfo` object | Catalog-confirmed; existing adapter matches. |
+| Add person | `POST /ISAPI/AccessControl/UserInfo/Record` | `UserInfo` array with `employeeNo`, `name`, `Valid.beginTime/endTime`, `localUIRight` | Production-validated. `localUIRight=true` grants local terminal administrator rights. |
+| Edit person | `PUT /ISAPI/AccessControl/UserInfo/Modify` | Single `UserInfo` object, including canonical `localUIRight` | Production-validated on Poptún 2 and then all assigned devices for Gener. The adapter re-reads the person and rejects an unconfirmed role. |
 | Delete person | `PUT /ISAPI/AccessControl/UserInfoDetail/Delete` | `UserInfoDetail.mode=byEmployeeNo`, `EmployeeNoList` | Catalog-confirmed; existing adapter matches. |
 | Search people | `POST /ISAPI/AccessControl/UserInfo/Search` | `UserInfoSearchCond` with stable `searchID`, zero-based `searchResultPosition`, `maxResults` | Read-validated with pagination: AD4776127 has 1 match; K43214566 reports 37 matches. |
 | Add card | `POST /ISAPI/AccessControl/CardInfo/Record` | `CardInfo.employeeNo`, `cardNo` | Catalog-confirmed; existing adapter matches. |
@@ -72,6 +72,12 @@ Every path below uses `?format=json&devIndex=<uuid>` (or its equivalent query or
 ## Biometric decision
 
 The installed API can read an existing template with `FingerPrintUpload` and add it to another device with `FingerPrintDownload`. RenovaGT performs this as a single backend-only in-memory transfer. Templates are never stored in Supabase, command payloads, audit rows, logs, frontend state or browser traffic. Every destination is re-read after transfer; a missing `fingerPrintID` is recorded as a partial failure instead of success.
+
+New device assignments enqueue a credential repair only after their person/card
+provisioning dependency succeeds. The repair compares person, local device role,
+card and fingerprint count with their canonical employee values. A verified
+source fingerprint is transferred in memory automatically; deterministic vendor
+limitations remain active per-device incidents and are not re-enqueued.
 
 ## Audit of current RenovaGT implementation
 

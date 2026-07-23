@@ -24,9 +24,21 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
 
   async syncPerson(command: DeviceCommand) {
     const employeeNo = numericEmployeeNo(command);
-    const body = { UserInfo: { employeeNo, name: required(command, "name"), Valid: validity(command) } };
+    const body = {
+      UserInfo: {
+        employeeNo,
+        name: required(command, "name"),
+        Valid: validity(command),
+        localUIRight: requiredBoolean(command, "local_ui_right")
+      }
+    };
     const modify = command.command_type === "update_person";
     await this.call(modify ? "/ISAPI/AccessControl/UserInfo/Modify" : "/ISAPI/AccessControl/UserInfo/Record", modify ? "PUT" : "POST", modify ? body : { UserInfo: [body.UserInfo] });
+    const verified = await this.searchPerson(employeeNo);
+    if (!verified) throw new Error("HIKVISION_PERSON_NOT_VERIFIED");
+    if ((verified.localUIRight === true) !== body.UserInfo.localUIRight) {
+      throw new Error("HIKVISION_DEVICE_ROLE_NOT_VERIFIED");
+    }
   }
 
   async deletePerson(command: DeviceCommand) {
@@ -103,7 +115,9 @@ export class HikDeviceGatewayAdapter implements DeviceAdapter {
     return {
       person: {
         employeeNo: String(person.employeeNo ?? person.employeeNoString ?? employeeNo),
-        name: String(person.name ?? "")
+        name: String(person.name ?? ""),
+        localUIRight: person.localUIRight === true,
+        userType: String(person.userType ?? "normal")
       },
       cardNumbers,
       fingerprintCount: safeCount(person.numOfFP ?? person.fingerPrintNum ?? person.fingerprintCount),
@@ -268,6 +282,11 @@ function required(command: DeviceCommand, key: string) {
   const value = command.payload[key];
   if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required`);
   return value.trim();
+}
+function requiredBoolean(command: DeviceCommand, key: string) {
+  const value = command.payload[key];
+  if (typeof value !== "boolean") throw new Error(`${key} must be boolean`);
+  return value;
 }
 function numericEmployeeNo(command: DeviceCommand) {
   const value = required(command, "employee_no");

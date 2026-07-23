@@ -12,6 +12,7 @@ const employeeSchema = z.object({
   full_name: z.string().trim().min(1).max(160), email: z.string().email().nullable().optional(),
   phone: z.string().max(40).nullable().optional(), document_number: z.string().max(80).nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).default("active"),
+  hikvision_is_admin: z.boolean().default(false),
   card_number: z.string().trim().max(64).nullable().optional(), pin_enabled: z.boolean().default(false),
   hired_at: z.string().nullable().optional(), terminated_at: z.string().nullable().optional(),
   access_valid_from: z.string().nullable().optional(), access_valid_to: z.string().nullable().optional(),
@@ -79,12 +80,18 @@ Deno.serve(async (req) => {
 
     if (input.action === "commit_creation_session") {
       const { device_ids, metadata, ...employee } = input.employee;
+      const uniqueDeviceIds = [...new Set(device_ids)];
       const { data, error } = await supabase.rpc("admin_commit_employee_creation_session", {
         p_session_id: input.session_id, p_employee: { ...employee, metadata: sanitizeMetadata(metadata) },
-        p_device_ids: [...new Set(device_ids)], p_requested_by: actor.user_id
+        p_device_ids: uniqueDeviceIds, p_requested_by: actor.user_id
       });
       if (error) throw error;
-      return jsonResponse({ employee: data, trace_id: traceId }, 201);
+      const repairJobs = await enqueuePostAssignmentRepairs(
+        supabase, data.id, uniqueDeviceIds, actor.user_id, traceId
+      );
+      return jsonResponse({
+        employee: data, queued_credential_repairs: repairJobs.length, trace_id: traceId
+      }, 201);
     }
 
     if (input.action === "cancel_creation_session") {
@@ -162,12 +169,36 @@ Deno.serve(async (req) => {
     }
 
     const { device_ids, metadata, ...employee } = input.employee;
+    const uniqueDeviceIds = [...new Set(device_ids)];
+    let previousDeviceIds: string[] = [];
+    let previousIsAdmin = false;
+    if (input.action === "update") {
+      const [previousEmployee, previousLinks] = await Promise.all([
+        supabase.from("employees").select("hikvision_is_admin").eq("id", input.id).single(),
+        supabase.from("employee_devices").select("device_id").eq("employee_id", input.id)
+      ]);
+      if (previousEmployee.error) throw previousEmployee.error;
+      if (previousLinks.error) throw previousLinks.error;
+      previousIsAdmin = Boolean(previousEmployee.data.hikvision_is_admin);
+      previousDeviceIds = (previousLinks.data ?? []).map((item: any) => item.device_id);
+    }
     const { data: saved, error: employeeError } = await supabase.rpc("admin_save_employee", {
-      p_employee: { ...employee, metadata: sanitizeMetadata(metadata) }, p_device_ids: [...new Set(device_ids)],
+      p_employee: { ...employee, metadata: sanitizeMetadata(metadata) }, p_device_ids: uniqueDeviceIds,
       p_requested_by: actor.user_id, p_employee_id: input.action === "update" ? input.id : null
     });
     if (employeeError) throw employeeError;
-    return jsonResponse({ employee: saved, queued_devices: device_ids.length, trace_id: traceId }, input.action === "create" ? 201 : 200);
+    const previousSet = new Set(previousDeviceIds);
+    const newlyAssigned = uniqueDeviceIds.filter((deviceId) => !previousSet.has(deviceId));
+    const roleChanged = input.action === "update"
+      && previousIsAdmin !== Boolean(input.employee.hikvision_is_admin);
+    const repairDeviceIds = roleChanged ? uniqueDeviceIds : newlyAssigned;
+    const repairJobs = await enqueuePostAssignmentRepairs(
+      supabase, saved.id, repairDeviceIds, actor.user_id, traceId
+    );
+    return jsonResponse({
+      employee: saved, queued_devices: uniqueDeviceIds.length,
+      queued_credential_repairs: repairJobs.length, trace_id: traceId
+    }, input.action === "create" ? 201 : 200);
   } catch (error) {
     return edgeErrorResponse(error, traceId);
   }
@@ -182,7 +213,8 @@ async function enqueueImport(supabase: any, deviceId: string, requestedBy: strin
 }
 
 async function enqueueEmployeeVerification(supabase: any, employeeId: string, requestedDeviceIds: string[] | undefined,
-  mode: "verify_employee_credentials" | "repair_employee_credentials", requestedBy: string, traceId: string) {
+  mode: "verify_employee_credentials" | "repair_employee_credentials", requestedBy: string, traceId: string,
+  dependsOnByDevice: Map<string, string> = new Map()) {
   const { data: employee, error: employeeError } = await supabase.from("employees")
     .select("id,hikvision_employee_no").eq("id", employeeId).single();
   if (employeeError) throw employeeError;
@@ -202,12 +234,31 @@ async function enqueueEmployeeVerification(supabase: any, employeeId: string, re
   const rows = deviceIds.filter((deviceId: string) => !activeDevices.has(deviceId)).map((deviceId: string) => ({
     device_id: deviceId, employee_id: employeeId, command_type: "sync_device_people",
     requested_by: requestedBy,
-    payload: { mode, employee_no: employeeNo, trace_id: traceId }
+    payload: { mode, employee_no: employeeNo, trace_id: traceId },
+    depends_on_command_id: dependsOnByDevice.get(deviceId) ?? null
   }));
   if (!rows.length) return [];
   const { data, error } = await supabase.from("device_commands").insert(rows).select("id");
   if (error) throw error;
   return (data ?? []).map((item: any) => item.id);
+}
+
+async function enqueuePostAssignmentRepairs(supabase: any, employeeId: string, deviceIds: string[],
+  requestedBy: string, traceId: string) {
+  if (!deviceIds.length) return [];
+  const { data: provisioning, error } = await supabase.from("device_commands")
+    .select("id,device_id,created_at").eq("employee_id", employeeId)
+    .in("device_id", deviceIds).in("command_type", ["sync_person", "update_person", "sync_card"])
+    .in("status", ["pending", "processing"]).order("created_at", { ascending: false });
+  if (error) throw error;
+  const dependencies = new Map<string, string>();
+  for (const command of provisioning ?? []) {
+    if (!dependencies.has(command.device_id)) dependencies.set(command.device_id, command.id);
+  }
+  return enqueueEmployeeVerification(
+    supabase, employeeId, deviceIds, "repair_employee_credentials",
+    requestedBy, traceId, dependencies
+  );
 }
 
 async function enqueueFingerprintReplication(supabase: any, input: {
