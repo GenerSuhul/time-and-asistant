@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { gatewayEventPayloadSchema, type GatewayEventPayload } from "@attendance/shared";
 import { normalizeEventType } from "../event-mapping.js";
 import { logger } from "../logger.js";
@@ -134,7 +134,9 @@ export async function enqueueEvent(payload: unknown) {
 }
 
 export async function processGatewayEvent(input: unknown, options: ProcessEventOptions = {}) {
+  const processingStartedAt = Date.now();
   const payload = sanitizeGatewayPayload(gatewayEventPayloadSchema.parse(normalizeIncomingDate(input)));
+  const traceId = optionalText(payload.payload?.trace_id) ?? randomUUID();
   let device: DeviceRow | null = null;
   let queueId = options.queueId;
 
@@ -262,10 +264,25 @@ export async function processGatewayEvent(input: unknown, options: ProcessEventO
     }
 
     await markQueue(queueId, "success");
-    return {
+    const persistedAt = insertedAttendance?.ingested_at ?? existingAttendance.ingested_at;
+    const duplicated = rawDuplicated || (!inserted && !updated);
+    logger.info({
+      event: "device_event_ingested",
+      traceId,
+      deviceId: device.id,
+      source: ingestionSource,
+      eventType,
       inserted,
       updated,
-      duplicated: rawDuplicated || (!inserted && !updated),
+      duplicated,
+      callbackToPersistMs: differenceMs(callbackReceivedAt, persistedAt),
+      ingestProcessingMs: Date.now() - processingStartedAt
+    }, "Device event ingestion completed");
+    return {
+      trace_id: traceId,
+      inserted,
+      updated,
+      duplicated,
       raw_event_id: rawEvent.id,
       event_hash: hash,
       event_type: eventType,
@@ -469,6 +486,12 @@ function optionalTimestamp(value: unknown) {
   if (!text) return null;
   const parsed = new Date(text);
   return Number.isFinite(parsed.valueOf()) ? parsed.toISOString() : null;
+}
+
+function differenceMs(from: string | null | undefined, to: string | null | undefined) {
+  if (!from || !to) return null;
+  const value = new Date(to).getTime() - new Date(from).getTime();
+  return Number.isFinite(value) ? Math.max(0, value) : null;
 }
 
 function scheduleRealtimeStateUpdate(device: DeviceRow, payload: GatewayEventPayload, options: ProcessEventOptions) {

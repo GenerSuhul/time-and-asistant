@@ -231,7 +231,7 @@ async function actorScope(supabase: any, userId: string): Promise<DeviceScope> {
   const rows = data ?? [];
   const global = rows.some((entry: any) => {
     const role = Array.isArray(entry.roles) ? entry.roles[0] : entry.roles;
-    return role?.key === "super_admin" && entry.company_id === null;
+    return ["super_admin", "it_admin", "hr_admin"].includes(role?.key) && entry.company_id === null;
   });
   return { global, companyIds: new Set(rows.map((entry: any) => entry.company_id).filter(Boolean)) };
 }

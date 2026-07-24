@@ -41,10 +41,16 @@ export async function runAttendanceSyncJobWorkerOnce() {
 
 async function processJob(job: AttendanceSyncJob) {
   const workerDetectedAt = new Date().toISOString();
+  const effectiveDevicesTotal = Math.max(
+    Number(job.devices_total ?? 0),
+    Array.isArray(job.device_ids) ? job.device_ids.length : 0
+  );
+  const effectiveJob = { ...job, devices_total: effectiveDevicesTotal };
   const { data: claimed, error: claimError } = await supabase.from("attendance_sync_jobs").update({
     status: "processing",
     stage: "starting",
     progress: 1,
+    devices_total: effectiveDevicesTotal,
     worker_detected_at: workerDetectedAt,
     started_at: workerDetectedAt
   }).eq("id", job.id).eq("status", "pending").select("id").maybeSingle();
@@ -75,7 +81,7 @@ async function processJob(job: AttendanceSyncJob) {
       trigger: "command",
       traceId: job.trace_id,
       concurrency: 2,
-      onProgress: (progress) => updateProgress(job, state, progress)
+      onProgress: (progress) => updateProgress(effectiveJob, state, progress)
     });
 
     const eventsUpsertedAt = new Date().toISOString();
@@ -84,6 +90,7 @@ async function processJob(job: AttendanceSyncJob) {
       status: "calculating",
       stage: "calculating_report",
       progress: 90,
+      devices_total: Math.max(effectiveDevicesTotal, summary.devices.length),
       devices_done: state.devicesDone,
       events_found: summary.events_found,
       events_inserted: summary.events_inserted,
@@ -95,7 +102,7 @@ async function processJob(job: AttendanceSyncJob) {
 
     await Promise.all(job.company_ids.map(async (companyId) => {
       const { error } = await supabase.functions.invoke("calculate-daily-attendance", {
-        body: { date: job.date, company_id: companyId }
+        body: { date: job.date, company_id: companyId, trace_id: job.trace_id }
       });
       if (error) throw error;
     }));
@@ -120,6 +127,7 @@ async function processJob(job: AttendanceSyncJob) {
       status,
       stage: status === "failed" ? "failed" : "updated",
       progress: 100,
+      devices_total: Math.max(effectiveDevicesTotal, summary.devices.length),
       devices_done: state.devicesDone,
       events_found: summary.events_found,
       events_inserted: summary.events_inserted,
@@ -136,7 +144,10 @@ async function processJob(job: AttendanceSyncJob) {
     logger.info({
       event: "attendance_sync_job_complete", traceId: job.trace_id, jobId: job.id,
       status, timing, eventsFound: summary.events_found,
-      eventsInserted: summary.events_inserted, eventsSkipped: summary.events_skipped
+      eventsInserted: summary.events_inserted, eventsSkipped: summary.events_skipped,
+      devicesTotal: Math.max(effectiveDevicesTotal, summary.devices.length),
+      devicesResponded: summary.devices.filter((device) => device.status === "success").length,
+      devicesFailed: summary.devices.filter((device) => device.status !== "success").length
     }, "Attendance sync job completed");
   } catch (error) {
     const finishedAt = new Date().toISOString();

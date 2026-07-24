@@ -76,16 +76,23 @@ export function DailyReportPage() {
     }
   });
 
-  const showTerminalJob = useCallback((job: any) => {
+  const showTerminalJob = useCallback((job: any, report?: any) => {
     const results = Array.isArray(job.device_results) ? job.device_results : [];
     const successful = results.filter((device: any) => device.status === "success").length;
-    const total = Number(job.devices_total ?? results.length);
+    const total = Math.max(
+      Number(job.devices_total ?? 0),
+      Number(job.devices_done ?? 0),
+      results.length
+    );
     const details = `${job.events_found ?? 0} eventos encontrados, ${job.events_inserted ?? 0} nuevos y ${job.events_skipped ?? 0} ya existentes/omitidos.`;
+    const reportDetails = report?.rows?.length
+      ? ` ${report.rows.length} filas visibles en el reporte.`
+      : report?.diagnostics?.message ? ` ${report.diagnostics.message}` : "";
     setMessage(job.status === "failed"
       ? "No fue posible buscar marcajes en los dispositivos. Revisa el detalle e inténtalo nuevamente."
       : job.status === "partial"
-        ? `Reporte parcial: ${successful} de ${total} ${total === 1 ? "dispositivo respondió" : "dispositivos respondieron"}.`
-        : `Reporte actualizado. ${details}`);
+        ? `Reporte parcial: ${successful} de ${total} ${total === 1 ? "dispositivo respondió" : "dispositivos respondieron"}. ${details}${reportDetails}`
+        : `Reporte actualizado. ${details}${reportDetails}`);
     setMessageSeverity(job.status === "failed" ? "error" : job.status === "partial" ? "warning" : "success");
   }, []);
 
@@ -116,8 +123,13 @@ export function DailyReportPage() {
       setSyncJob(job);
       if (["complete", "partial", "failed"].includes(job.status)) {
         setSyncing(false);
-        showTerminalJob(job);
-        await queryClient.invalidateQueries({ queryKey: ["daily-report"] });
+        await queryClient.invalidateQueries({ queryKey: reportQueryKey(selection) });
+        const refreshed = await queryClient.fetchQuery({
+          queryKey: reportQueryKey(selection),
+          queryFn: () => fetchDailyReport(selection),
+          staleTime: 0
+        });
+        showTerminalJob(job, refreshed);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -127,12 +139,12 @@ export function DailyReportPage() {
   }, [queryClient, showTerminalJob]);
 
   useEffect(() => {
-    const active = query.data?.activeJob;
-    if (active?.id && active.id !== syncJob?.id) {
-      setSyncJob(active);
-      setSyncing(true);
+    const latest = query.data?.activeJob ?? query.data?.latestJob;
+    if (latest?.id && latest.id !== syncJob?.id) {
+      setSyncJob(latest);
+      setSyncing(isActiveJob(latest));
     }
-  }, [query.data?.activeJob, syncJob?.id]);
+  }, [query.data?.activeJob, query.data?.latestJob, syncJob?.id]);
 
   useEffect(() => {
     if (!syncJob?.id || ["complete", "partial", "failed"].includes(syncJob.status)) return;
@@ -153,8 +165,15 @@ export function DailyReportPage() {
       setSyncJob(job);
       if (["complete", "partial", "failed"].includes(job.status)) {
         setSyncing(false);
-        showTerminalJob(job);
-        void queryClient.invalidateQueries({ queryKey: ["daily-report"] });
+        void (async () => {
+          await queryClient.invalidateQueries({ queryKey: reportQueryKey(reportSelection) });
+          const refreshed = await queryClient.fetchQuery({
+            queryKey: reportQueryKey(reportSelection),
+            queryFn: () => fetchDailyReport(reportSelection),
+            staleTime: 0
+          });
+          showTerminalJob(job, refreshed);
+        })();
       }
     };
     const channel = supabase.channel(`attendance-sync-job-${syncJob.id}`)
@@ -179,7 +198,7 @@ export function DailyReportPage() {
       cancelled = true;
       void supabase.removeChannel(channel);
     };
-  }, [queryClient, showTerminalJob, syncJob?.id, syncJob?.status]);
+  }, [queryClient, reportSelection, showTerminalJob, syncJob?.id, syncJob?.status]);
 
   async function exportExcel() {
     setMessage(null);
@@ -219,8 +238,6 @@ export function DailyReportPage() {
       if (result.activeJob) {
         setSyncJob(result.activeJob);
         setSyncing(true);
-      } else if (result.rows.length === 0) {
-        await enqueueSync(false, selection);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -232,8 +249,14 @@ export function DailyReportPage() {
 
   const deviceResults = Array.isArray(syncJob?.device_results) ? syncJob.device_results : [];
   const successfulDevices = deviceResults.filter((device: any) => device.status === "success").length;
-  const failedDevices = Math.max(0, Number(syncJob?.devices_total ?? deviceResults.length) - successfulDevices);
+  const totalDevices = Math.max(
+    Number(syncJob?.devices_total ?? 0),
+    Number(syncJob?.devices_done ?? 0),
+    deviceResults.length
+  );
+  const failedDevices = Math.max(0, totalDevices - successfulDevices);
   const rows = query.data?.rows ?? [];
+  const diagnostics = query.data?.diagnostics;
   const pendingSelection = draftSelection({
     date: draftDate,
     branchId: draftBranchId,
@@ -267,7 +290,15 @@ export function DailyReportPage() {
             {generating ? "Generando…" : "Generar reporte"}
           </Button>
           <Button startIcon={<RefreshIcon />} variant="outlined" onClick={() => void enqueueSync(true, reportSelection)} disabled={!hasGenerated || syncing || generating || selectionPending} sx={{ whiteSpace: "nowrap" }}>
-            Actualizar desde dispositivos
+            {syncing ? syncButtonLabel(syncJob) : "Actualizar desde dispositivos"}
+          </Button>
+          <Button variant="text" onClick={() => {
+            setDraftBranchId("");
+            setDraftDepartmentId("");
+            setDraftEmployeeId("");
+            setDraftDeviceId("");
+          }} disabled={generating || syncing || (!draftBranchId && !draftDepartmentId && !draftEmployeeId && !draftDeviceId)}>
+            Limpiar filtros
           </Button>
           <Button startIcon={<FileDownloadIcon />} variant="text" onClick={exportExcel} disabled={rows.length === 0 || generating} sx={{ whiteSpace: "nowrap" }}>
             Exportar Excel
@@ -281,7 +312,7 @@ export function DailyReportPage() {
       }>{message}</Alert>}
       {syncJob?.status === "partial" && <Paper variant="outlined" sx={{ p: 1.5 }}>
         <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }}>
-          <Typography variant="body2">Consultados: {syncJob.devices_done}</Typography>
+          <Typography variant="body2">Consultados: {totalDevices}</Typography>
           <Typography variant="body2">Correctos: {successfulDevices}</Typography>
           <Typography variant="body2">Con error/offline: {failedDevices}</Typography>
           <Typography variant="body2">Eventos encontrados: {syncJob.events_found}</Typography>
@@ -303,11 +334,13 @@ export function DailyReportPage() {
         <Typography variant="body2" color="text.secondary">Primero revisamos el reporte disponible en Supabase.</Typography>
       </Paper>}
       {emptyState && <Paper variant="outlined" sx={{ p: 4, textAlign: "center" }}>
-        <Typography variant="h6">No hay marcajes guardados para esta fecha.</Typography>
-        <Typography color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>Se consultarán los dispositivos conectados y el reporte se actualizará automáticamente.</Typography>
-        <Button startIcon={<SearchIcon />} variant="outlined" onClick={() => void enqueueSync(true, reportSelection)} disabled={syncing}>
-          {syncing ? "Buscando en dispositivos…" : "Buscar en dispositivos"}
-        </Button>
+        <Typography variant="h6">{diagnostics?.message ?? "No hay marcajes guardados para esta fecha."}</Typography>
+        <Typography color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
+          {diagnosticSummary(diagnostics)}
+        </Typography>
+        {diagnostics?.reason !== "filters_active_no_results" && <Button startIcon={<SearchIcon />} variant="outlined" onClick={() => void enqueueSync(true, reportSelection)} disabled={syncing}>
+          {syncing ? syncButtonLabel(syncJob) : "Buscar en dispositivos"}
+        </Button>}
       </Paper>}
       {!initialState && !loadingCache && rows.length > 0 && <TableContainer component={Paper}>
         <Table size="small">
@@ -391,6 +424,25 @@ function syncStage(job: any) {
   return "Buscando marcajes en dispositivos…";
 }
 
+function syncButtonLabel(job: any) {
+  if (job?.stage === "calculating_report" || job?.status === "calculating") return "Calculando reporte…";
+  if (job?.stage === "persisting_events") return "Guardando eventos…";
+  return "Consultando dispositivos…";
+}
+
+function diagnosticSummary(diagnostics: any) {
+  if (!diagnostics) return "Puedes buscar marcajes históricos directamente en los dispositivos.";
+  const counters = [
+    `${diagnostics.raw_events ?? 0} crudos`,
+    `${diagnostics.normalized_events ?? 0} normalizados`,
+    `${diagnostics.linked_events ?? 0} vinculados`,
+    `${diagnostics.valid_attendance_events ?? 0} marcajes válidos`
+  ].join(" · ");
+  return diagnostics.reason === "filters_active_no_results"
+    ? `${counters}. Limpia o ajusta los filtros y genera el reporte nuevamente.`
+    : `${counters}. Puedes buscar marcajes históricos directamente en los dispositivos.`;
+}
+
 function isActiveJob(job: any) {
   return Boolean(job && ["pending", "processing", "calculating"].includes(job.status));
 }
@@ -420,35 +472,21 @@ function reportQueryKey(selection: ReportSelection) {
 }
 
 async function fetchDailyReport(selection: ReportSelection) {
-  const startedAt = performance.now();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const userId = sessionData.session?.user.id;
-  if (!userId) throw new Error("La sesión autenticada no está disponible");
-  const [reportResult, jobResult] = await Promise.all([
-    supabase.rpc("get_attendance_daily_report", {
-      p_date: selection.date,
-      p_branch_id: selection.branchId || undefined,
-      p_employee_id: selection.employeeId || undefined
-    }),
-    supabase.from("attendance_sync_jobs")
-      .select("id,date,status,stage,progress,devices_total,devices_done,events_found,events_inserted,events_skipped,error_message,device_results,started_at,finished_at,created_at")
-      .eq("date", selection.date).eq("requested_by", userId)
-      .order("created_at", { ascending: false }).limit(1).maybeSingle()
-  ]);
-  if (reportResult.error) throw reportResult.error;
-  if (jobResult.error) throw jobResult.error;
-  const reportRows = reportResult.data ?? [];
-  const rows = reportRows.filter((row: any) =>
-    (!selection.departmentId || row.department_id === selection.departmentId) &&
-    (!selection.deviceId || row.device_ids?.includes(selection.deviceId))
-  );
-  const latestJob = jobResult.data;
-  const lastCalculatedAt = reportRows.reduce((latest: string | null, row: any) =>
-    !latest || new Date(row.calculated_at) > new Date(latest) ? row.calculated_at : latest, null);
+  const data = await invokeEdge<any>("attendance-reports", {
+    action: "daily",
+    date: selection.date,
+    branch_id: selection.branchId || undefined,
+    department_id: selection.departmentId || undefined,
+    employee_id: selection.employeeId || undefined,
+    device_id: selection.deviceId || undefined,
+    recalculate: false
+  });
   return {
-    rows,
-    cache: { hit: rows.length > 0, last_calculated_at: lastCalculatedAt, response_ms: Math.round(performance.now() - startedAt) },
-    activeJob: isActiveJob(latestJob) ? latestJob : null
+    rows: data?.rows ?? [],
+    cache: data?.cache,
+    diagnostics: data?.diagnostics ?? null,
+    latestJob: data?.latest_job ?? null,
+    activeJob: data?.active_job ?? null
   };
 }
 
