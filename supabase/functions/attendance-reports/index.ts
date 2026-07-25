@@ -20,6 +20,7 @@ const schema = z.discriminatedUnion("action", [
 
 Deno.serve(async (req) => {
   const receivedAt = Date.now();
+  const traceId = req.headers.get("x-trace-id")?.trim() || crypto.randomUUID();
   const options = handleOptions(req);
   if (options) return options;
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -111,7 +112,8 @@ Deno.serve(async (req) => {
     const isToday = start === end && start === todayInGuatemala();
     const calculatedAgeMs = lastCalculatedAt ? Date.now() - new Date(lastCalculatedAt).getTime() : Number.POSITIVE_INFINITY;
     const stale = reportRows.length === 0 || (isToday && calculatedAgeMs > 15 * 60 * 1000 && !latestJob?.status?.match(/pending|processing|calculating/));
-    return jsonResponse({
+    const response = {
+      trace_id: traceId,
       timezone: "America/Guatemala",
       start_date: start,
       end_date: end,
@@ -125,9 +127,10 @@ Deno.serve(async (req) => {
       diagnostics,
       latest_job: latestJob,
       active_job: latestJob?.status?.match(/pending|processing|calculating/) ? latestJob : null
-    });
+    };
     console.log(JSON.stringify({
       event: "attendance_report_returned",
+      trace_id: traceId,
       actor_id: actor.user_id,
       date: start,
       rows: reportRows.length,
@@ -135,9 +138,16 @@ Deno.serve(async (req) => {
       diagnostic_reason: diagnostics?.reason ?? null,
       response_ms: Date.now() - receivedAt
     }));
+    return jsonResponse(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return jsonResponse({ error: message.slice(0, 500) }, 400);
+    console.error(JSON.stringify({
+      event: "attendance_report_failed",
+      trace_id: traceId,
+      error: message.slice(0, 500),
+      response_ms: Date.now() - receivedAt
+    }));
+    return jsonResponse({ error: message.slice(0, 500), trace_id: traceId }, 400);
   }
 });
 

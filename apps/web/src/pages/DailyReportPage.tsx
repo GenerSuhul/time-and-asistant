@@ -472,21 +472,68 @@ function reportQueryKey(selection: ReportSelection) {
 }
 
 async function fetchDailyReport(selection: ReportSelection) {
-  const data = await invokeEdge<any>("attendance-reports", {
-    action: "daily",
-    date: selection.date,
-    branch_id: selection.branchId || undefined,
-    department_id: selection.departmentId || undefined,
-    employee_id: selection.employeeId || undefined,
-    device_id: selection.deviceId || undefined,
-    recalculate: false
-  });
+  let data: any;
+  try {
+    data = await invokeEdge<any>("attendance-reports", {
+      action: "daily",
+      date: selection.date,
+      branch_id: selection.branchId || undefined,
+      department_id: selection.departmentId || undefined,
+      employee_id: selection.employeeId || undefined,
+      device_id: selection.deviceId || undefined,
+      recalculate: false
+    });
+  } catch {
+    return fetchLegacyDailyReport(selection);
+  }
+  if ((data?.rows?.length ?? 0) === 0 && !Object.prototype.hasOwnProperty.call(data ?? {}, "diagnostics")) {
+    return fetchLegacyDailyReport(selection);
+  }
   return {
     rows: data?.rows ?? [],
     cache: data?.cache,
     diagnostics: data?.diagnostics ?? null,
     latestJob: data?.latest_job ?? null,
     activeJob: data?.active_job ?? null
+  };
+}
+
+async function fetchLegacyDailyReport(selection: ReportSelection) {
+  const startedAt = performance.now();
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData.session?.user.id;
+  if (!userId) throw new Error("La sesión autenticada no está disponible");
+  const [reportResult, jobResult] = await Promise.all([
+    supabase.rpc("get_attendance_daily_report", {
+      p_date: selection.date,
+      p_branch_id: selection.branchId || undefined,
+      p_employee_id: selection.employeeId || undefined
+    }),
+    supabase.from("attendance_sync_jobs")
+      .select("id,date,status,stage,progress,devices_total,devices_done,events_found,events_inserted,events_skipped,error_message,device_results,started_at,finished_at,created_at")
+      .eq("date", selection.date).eq("requested_by", userId)
+      .order("created_at", { ascending: false }).limit(1).maybeSingle()
+  ]);
+  if (reportResult.error) throw reportResult.error;
+  if (jobResult.error) throw jobResult.error;
+  const reportRows = reportResult.data ?? [];
+  const rows = reportRows.filter((row: any) =>
+    (!selection.departmentId || row.department_id === selection.departmentId) &&
+    (!selection.deviceId || row.device_ids?.includes(selection.deviceId))
+  );
+  const latestJob = jobResult.data;
+  const lastCalculatedAt = reportRows.reduce((latest: string | null, row: any) =>
+    !latest || new Date(row.calculated_at) > new Date(latest) ? row.calculated_at : latest, null);
+  return {
+    rows,
+    cache: {
+      hit: rows.length > 0,
+      last_calculated_at: lastCalculatedAt,
+      response_ms: Math.round(performance.now() - startedAt)
+    },
+    diagnostics: null,
+    latestJob,
+    activeJob: isActiveJob(latestJob) ? latestJob : null
   };
 }
 
