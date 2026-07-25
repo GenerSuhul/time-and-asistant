@@ -17,6 +17,7 @@ const branchFields: CrudField[] = [
   { name: "address", label: "Direccion", fullWidth: true },
   { name: "timezone", label: "Zona horaria", required: true, defaultValue: "America/Guatemala" },
   { name: "unit_type", label: "Tipo de unidad", type: "select", options: ["store", "administration"], defaultValue: "store" },
+  { name: "region_id", label: "Región", type: "relation", relation: { table: "attendance_report_regions", labelColumn: "name" }, helperText: "Catálogo usado por reportes regionales." },
   { name: "is_active", label: "Activa", type: "boolean", defaultValue: true }
 ];
 
@@ -87,7 +88,7 @@ export function CompaniesPage() {
 }
 
 export function BranchesPage() {
-  return <CrudPage title="Sucursales" table="branches" select="*, companies:company_id(name)" fields={branchFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "code", label: "Codigo" }, { name: "unit_type", label: "Tipo" }, { name: "is_active", label: "Activa" }])} />;
+  return <CrudPage title="Sucursales" table="branches" select="*, companies:company_id(name), attendance_report_regions:region_id(name)" fields={branchFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "attendance_report_regions.name", label: "Región" }, { name: "code", label: "Codigo" }, { name: "unit_type", label: "Tipo" }, { name: "is_active", label: "Activa" }])} />;
 }
 
 export function WorkSchedulesPage() {

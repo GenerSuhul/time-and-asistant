@@ -2,86 +2,129 @@ import ExcelJS from "npm:exceljs@4.4.0";
 import { calculateAttendanceForDate } from "./attendance.ts";
 import {
   classifyAttendance,
+  normalizeReportColumns,
   resolveReportRecipients,
+  resolveReportOutputs,
   type AttendanceClassification,
+  type ReportBranchTarget,
+  type ReportColumnKey,
   type ReportContact,
+  type ReportOutput,
   type UnitType
 } from "./attendance-report-engine.ts";
 
-type GenerateInput = {
+export type GenerateInput = {
   report_date: string;
+  config_id?: string;
+  output_key?: string;
   branch_id?: string;
   department_id?: string;
   dry_run?: boolean;
   run_id?: string;
+  html_columns?: Partial<Record<ReportColumnKey, boolean>>;
+  column_order?: string[];
 };
 
 export async function generateAttendanceReport(supabase: any, input: GenerateInput) {
-  const config = await loadConfig(supabase, input);
   const reportDate = input.report_date;
   const dryRun = Boolean(input.dry_run);
   let run = input.run_id ? await loadRun(supabase, input.run_id) : null;
+  const config = await loadConfig(supabase, input, run);
+  const branches = await resolveConfigBranches(supabase, config, run?.branch_ids);
+  const availableOutputs = resolveReportOutputs(branches, config.output_mode ?? "consolidated");
+  const output = selectOutput(availableOutputs, input.output_key ?? run?.output_key);
 
   if (!dryRun) {
-    run = await ensureRun(supabase, run, config, reportDate);
-    await updateRun(supabase, run.id, { status: "generating", error_message: null });
+    run = await ensureRun(supabase, run, config, reportDate, output, branches);
+    await transitionRun(supabase, run.id, "generating", "Generando reporte con datos de asistencia", {
+      error_message: null,
+      skipped_reason: null
+    });
   }
 
-  await calculateAttendanceForDate(supabase, {
-    date: reportDate,
-    company_id: config.company_id,
-    branch_id: config.branch_id
-  });
+  const selectedBranches = branches.filter((branch) => output.branchIds.includes(branch.id));
+  for (const branch of selectedBranches) {
+    await calculateAttendanceForDate(supabase, {
+      date: reportDate,
+      company_id: branch.company_id,
+      branch_id: branch.id
+    });
+  }
 
-  const rows = await loadAttendanceRows(supabase, reportDate, config.branch_id, config.department_id);
-  const rule = one(config.attendance_report_rules);
-  if (!rule) throw new Error("La configuración no tiene una regla de asistencia válida");
-  const items: ReturnType<typeof toReportItem>[] = rows.map((row: any) => toReportItem(row, rule));
+  const rows = await loadAttendanceRows(supabase, reportDate, output.branchIds, config.department_id);
+  const fallbackRule = one(config.attendance_report_rules);
+  if (!fallbackRule) throw new Error("La configuración no tiene una regla de asistencia válida");
+  const items: ReturnType<typeof toReportItem>[] = rows.map((row: any) =>
+    toReportItem(row, one(row.attendance_report_rule_detail) ?? fallbackRule)
+  );
   const counts = {
     total: items.length,
     ok: items.filter((item) => item.classification.severity === "ok").length,
     warnings: items.filter((item) => item.classification.severity === "warning").length,
     violations: items.filter((item) => item.classification.severity === "violation").length
   };
-  const contacts = await loadContacts(supabase, config.company_id);
+  const contacts = await loadContacts(supabase);
+  const outputUnitType = reportUnitType(selectedBranches, config.unit_type);
   const recipients = resolveReportRecipients(contacts, {
-    unitType: config.unit_type as UnitType,
-    branchId: config.branch_id,
+    unitType: outputUnitType,
+    companyIds: output.companyIds,
+    branchIds: output.branchIds,
+    regionIds: output.regionIds,
+    branchId: output.primaryBranchId,
     departmentId: config.department_id,
+    regionId: output.regionIds.length === 1 ? output.regionIds[0] : null,
     region: config.region,
     hasViolations: counts.violations > 0,
     hasWarnings: counts.warnings > 0,
     copyHrManagerOnlyOnViolation: config.copy_hr_manager_only_on_violation,
-    warningsTriggerHrCopy: config.warnings_trigger_hr_copy || rule.warnings_trigger_hr_copy,
-    copyCommercialManager: config.copy_commercial_manager && config.unit_type === "store"
+    warningsTriggerHrCopy: config.warnings_trigger_hr_copy || fallbackRule.warnings_trigger_hr_copy,
+    copyCommercialManager: config.copy_commercial_manager && outputUnitType === "store"
   });
-  const targetName = targetLabel(config);
+  const targetName = targetLabel(config, selectedBranches);
   const syncStatus = run?.sync_status ?? null;
   const partialSync = Boolean(syncStatus && syncStatus !== "complete");
   const subject = `Reporte de asistencia${partialSync ? " parcial" : ""} - ${targetName} - ${reportDate}`;
-  const html = buildReportEmailHtml({ targetName, reportDate, counts, items, hasViolations: counts.violations > 0, syncStatus });
+  const selectedColumns = normalizeReportColumns(
+    dryRun && input.html_columns ? input.html_columns : config.html_columns,
+    dryRun && input.column_order ? input.column_order : config.column_order
+  );
+  const html = buildReportEmailHtml({
+    targetName, reportDate, counts, items, hasViolations: counts.violations > 0,
+    syncStatus, columns: selectedColumns
+  });
 
   const result = {
     report_date: reportDate,
     config_id: config.id,
     target: targetName,
-    unit_type: config.unit_type,
+    scope_type: config.scope_type,
+    output_key: output.outputKey,
+    output_mode: config.output_mode,
+    branch_ids: output.branchIds,
+    unit_type: outputUnitType,
     recipients,
     counts,
     has_violations: counts.violations > 0,
     ready_to_send: recipients.to.length > 0,
+    columns: selectedColumns,
+    html,
     items
   };
   if (dryRun) return result;
   if (!run) throw new Error("No fue posible crear la ejecución del reporte");
   if (recipients.to.length === 0) {
-    await updateRun(supabase, run.id, {
-      status: "failed",
-      error_message: "No hay destinatarios TO configurados para esta unidad",
+    const reason = "No hay destinatarios principales cuyo alcance cubra completamente esta salida";
+    await transitionRun(supabase, run.id, "skipped", reason, {
+      error_message: null,
+      skipped_reason: reason,
       recipients_snapshot: recipients,
-      ...countColumns(counts)
+      ...countColumns(counts),
+      subject,
+      summary: { ...counts, sync_status: syncStatus, output_key: output.outputKey },
+      generated_at: new Date().toISOString(),
+      columns_snapshot: { enabled: config.html_columns, order: selectedColumns }
     });
-    throw new Error("No hay destinatarios TO configurados para esta unidad");
+    return { ...result, run_id: run.id, skipped: true, skipped_reason: reason };
   }
 
   let excelPath: string | null = null;
@@ -119,24 +162,24 @@ export async function generateAttendanceReport(supabase: any, input: GenerateInp
   }, { onConflict: "report_run_id" }).select("id").single();
   if (outboxError) throw outboxError;
 
-  await updateRun(supabase, run.id, {
-    status: "queued",
+  await transitionRun(supabase, run.id, "queued", "Reporte generado y agregado a la cola de correo", {
     has_violations: counts.violations > 0,
     ...countColumns(counts),
     recipients_snapshot: recipients,
     subject,
-    summary: { ...counts, sync_status: syncStatus },
+    summary: { ...counts, sync_status: syncStatus, output_key: output.outputKey },
     excel_path: excelPath,
     generated_at: new Date().toISOString(),
-    error_message: null
+    error_message: null,
+    columns_snapshot: { enabled: config.html_columns, order: selectedColumns },
+    scope_snapshot: scopeSnapshot(config, output, selectedBranches)
   });
   return { ...result, run_id: run.id, outbox_id: outbox.id, excel_path: excelPath };
 }
 
-async function loadConfig(supabase: any, input: GenerateInput) {
-  if (input.run_id) {
-    const run = await loadRun(supabase, input.run_id);
-    const { data, error } = await configQuery(supabase).eq("id", run.config_id).single();
+async function loadConfig(supabase: any, input: GenerateInput, run?: any) {
+  if (run || input.config_id) {
+    const { data, error } = await configQuery(supabase).eq("id", run?.config_id ?? input.config_id).single();
     if (error) throw error;
     return data;
   }
@@ -155,10 +198,51 @@ async function loadConfig(supabase: any, input: GenerateInput) {
 function configQuery(supabase: any) {
   return supabase.from("attendance_report_configs").select(`
     *,
+    companies:company_id(name),
     branches:branch_id(name),
     departments:department_id(name),
-    attendance_report_rules:rule_id(*)
+    attendance_report_regions:region_id(name),
+    attendance_report_rules:rule_id(*),
+    attendance_report_config_branches(branch_id)
   `);
+}
+
+export async function loadAttendanceReportConfig(supabase: any, id: string) {
+  const { data, error } = await configQuery(supabase).eq("id", id).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function resolveConfigBranches(supabase: any, config: any, restrictedIds?: string[] | null): Promise<ReportBranchTarget[]> {
+  let query = supabase.from("branches").select("id,company_id,region_id,name,unit_type").eq("is_active", true);
+  const linkedIds = (config.attendance_report_config_branches ?? []).map((link: any) => link.branch_id);
+  if (restrictedIds?.length) query = query.in("id", restrictedIds);
+  else if (config.scope_type === "global") {
+    // No additional filter.
+  } else if (config.scope_type === "company") query = query.eq("company_id", config.company_id);
+  else if (config.scope_type === "region") query = query.eq("company_id", config.company_id).eq("region_id", config.region_id);
+  else if (config.scope_type === "branch") query = query.eq("id", config.branch_id);
+  else if (config.scope_type === "branches") {
+    if (!linkedIds.length) return [];
+    query = query.in("id", linkedIds);
+  } else if (config.scope_type === "department") {
+    let departmentBranchIds = linkedIds;
+    if (!departmentBranchIds.length) {
+      const { data, error } = await supabase.from("department_branches").select("branch_id").eq("department_id", config.department_id);
+      if (error) throw error;
+      departmentBranchIds = (data ?? []).map((link: any) => link.branch_id);
+    }
+    if (!departmentBranchIds.length) return [];
+    query = query.in("id", departmentBranchIds);
+  } else if (config.branch_id) query = query.eq("id", config.branch_id);
+  const { data, error } = await query.order("name");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function resolveConfigOutputs(supabase: any, config: any) {
+  const branches = await resolveConfigBranches(supabase, config);
+  return { branches, outputs: resolveReportOutputs(branches, config.output_mode ?? "consolidated") };
 }
 
 async function loadRun(supabase: any, id: string) {
@@ -167,25 +251,39 @@ async function loadRun(supabase: any, id: string) {
   return data;
 }
 
-async function ensureRun(supabase: any, run: any, config: any, reportDate: string) {
+async function ensureRun(
+  supabase: any,
+  run: any,
+  config: any,
+  reportDate: string,
+  output: ReportOutput,
+  branches: ReportBranchTarget[]
+) {
   if (run) return run;
   const { data: existing, error: existingError } = await supabase.from("attendance_report_runs")
-    .select("*").eq("config_id", config.id).eq("report_date", reportDate).maybeSingle();
+    .select("*").eq("config_id", config.id).eq("report_date", reportDate).eq("output_key", output.outputKey).maybeSingle();
   if (existingError) throw existingError;
   if (existing) return existing;
   const { data, error } = await supabase.from("attendance_report_runs").insert({
     config_id: config.id,
     report_date: reportDate,
-    company_id: config.company_id,
-    branch_id: config.branch_id,
+    company_id: output.companyIds.length === 1 ? output.companyIds[0] : null,
+    branch_id: output.primaryBranchId,
+    branch_ids: output.branchIds,
+    output_key: output.outputKey,
     department_id: config.department_id,
-    status: "pending"
+    status: "pending",
+    status_detail: "Ejecución creada",
+    scope_snapshot: scopeSnapshot(config, output, branches.filter((branch) => output.branchIds.includes(branch.id))),
+    columns_snapshot: { enabled: config.html_columns, order: normalizeReportColumns(config.html_columns, config.column_order) },
+    audit_log: [{ status: "pending", at: new Date().toISOString(), detail: "Ejecución creada" }]
   }).select("*").single();
   if (error) throw error;
   return data;
 }
 
-async function loadAttendanceRows(supabase: any, date: string, branchId: string, departmentId?: string | null) {
+async function loadAttendanceRows(supabase: any, date: string, branchIds: string[], departmentId?: string | null) {
+  if (!branchIds.length) return [];
   const { data, error } = await supabase.from("daily_attendance").select(`
     *,
     employees:employee_id(
@@ -193,17 +291,21 @@ async function loadAttendanceRows(supabase: any, date: string, branchId: string,
       departments:department_id(name)
     ),
     branches:branch_id(name),
-    attendance_report_rules:rule_id(name)
-  `).eq("attendance_date", date).eq("branch_id", branchId).order("actual_check_in", { ascending: true, nullsFirst: false });
+    attendance_report_rules:rule_id(name),
+    attendance_report_rule_detail:rule_id(*)
+  `).eq("attendance_date", date).in("branch_id", branchIds).order("actual_check_in", { ascending: true, nullsFirst: false });
   if (error) throw error;
   return (data ?? []).filter((row: any) => !departmentId || one(row.employees)?.department_id === departmentId);
 }
 
-async function loadContacts(supabase: any, companyId: string): Promise<ReportContact[]> {
-  const { data, error } = await supabase.from("attendance_report_contacts").select("*")
-    .eq("company_id", companyId).eq("is_active", true);
+async function loadContacts(supabase: any): Promise<ReportContact[]> {
+  const { data, error } = await supabase.from("attendance_report_contacts")
+    .select("*,attendance_report_contact_branches(branch_id)").eq("is_active", true);
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).map((contact: any) => ({
+    ...contact,
+    branch_ids: (contact.attendance_report_contact_branches ?? []).map((link: any) => link.branch_id)
+  }));
 }
 
 function toReportItem(row: any, rule: any) {
@@ -239,9 +341,50 @@ function countColumns(counts: any) {
   };
 }
 
-async function updateRun(supabase: any, id: string, values: Record<string, unknown>) {
-  const { error } = await supabase.from("attendance_report_runs").update(values).eq("id", id);
+export async function transitionRun(
+  supabase: any,
+  id: string,
+  status: string,
+  detail: string,
+  values: Record<string, unknown> = {}
+) {
+  const { data: current, error: readError } = await supabase.from("attendance_report_runs").select("audit_log").eq("id", id).single();
+  if (readError) throw readError;
+  const audit = Array.isArray(current.audit_log) ? current.audit_log : [];
+  const { error } = await supabase.from("attendance_report_runs").update({
+    ...values,
+    status,
+    status_detail: detail,
+    audit_log: [...audit, { status, detail, at: new Date().toISOString() }]
+  }).eq("id", id);
   if (error) throw error;
+}
+
+function selectOutput(outputs: ReportOutput[], requested?: string | null) {
+  if (!outputs.length) throw new Error("El alcance configurado no resuelve ninguna sucursal activa");
+  if (!requested) return outputs[0];
+  const output = outputs.find((item) => item.outputKey === requested);
+  if (!output) throw new Error("La salida solicitada no pertenece al alcance actual de la configuración");
+  return output;
+}
+
+function reportUnitType(branches: ReportBranchTarget[], configured: string): UnitType | "mixed" {
+  if (configured === "department") return "department";
+  const values = [...new Set(branches.map((branch) => branch.unit_type).filter(Boolean))];
+  return values.length === 1 ? values[0] as UnitType : "mixed";
+}
+
+function scopeSnapshot(config: any, output: ReportOutput, branches: ReportBranchTarget[]) {
+  return {
+    scope_type: config.scope_type,
+    output_mode: config.output_mode,
+    output_key: output.outputKey,
+    company_ids: output.companyIds,
+    branch_ids: output.branchIds,
+    branch_names: branches.map((branch) => branch.name).filter(Boolean),
+    region_ids: output.regionIds,
+    department_id: config.department_id ?? null
+  };
 }
 
 async function buildWorkbook(items: any[], target: string, reportDate: string) {
@@ -288,11 +431,20 @@ function applyCellSeverity(cell: any, severity: string) {
   cell.font = { color: { argb: severity === "violation" ? "FF991B1B" : severity === "warning" ? "FF92400E" : "FF166534" } };
 }
 
-function buildReportEmailHtml(input: { targetName: string; reportDate: string; counts: any; items: any[]; hasViolations: boolean; syncStatus?: string | null }) {
+function buildReportEmailHtml(input: {
+  targetName: string;
+  reportDate: string;
+  counts: any;
+  items: any[];
+  hasViolations: boolean;
+  syncStatus?: string | null;
+  columns: ReportColumnKey[];
+}) {
   const scope = reportEmailScope(input);
   const schedule = reportEmailSchedule(input.items);
-  const rows = input.items.map((item) => reportEmailRowHtml(item)).join("");
-  const emptyRows = input.items.length === 0 ? `<tr><td colspan="8" style="padding:28px;text-align:center;color:#8b94a7;border-top:1px solid #edf0f7">No hay registros de asistencia para este reporte.</td></tr>` : "";
+  const rows = input.items.map((item) => reportEmailRowHtml(item, input.columns)).join("");
+  const headers = input.columns.map((column) => reportEmailHeaderHtml(column)).join("");
+  const emptyRows = input.items.length === 0 ? `<tr><td colspan="${input.columns.length}" style="padding:28px;text-align:center;color:#8b94a7;border-top:1px solid #edf0f7">No hay registros de asistencia para este reporte.</td></tr>` : "";
   const syncMessage = input.syncStatus && input.syncStatus !== "complete" ? `<div style="margin:0 30px 18px 30px;padding:14px 16px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:14px;line-height:1.45">
     <strong>Reporte parcial:</strong> algunos dispositivos no respondieron correctamente. El reporte contiene la informacion disponible.
   </div>` : "";
@@ -312,7 +464,7 @@ function buildReportEmailHtml(input: { targetName: string; reportDate: string; c
       .hero-title { font-size: 22px !important; line-height: 1.2 !important; margin-top: 14px !important; }
       .meta-cell { display: block !important; width: 100% !important; padding: 0 0 10px 0 !important; }
       .table-wrap { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; }
-      .report-table { min-width: 980px !important; }
+      .report-table { min-width: ${Math.max(620, input.columns.length * 145)}px !important; }
     }
   </style>
 </head>
@@ -361,18 +513,9 @@ function buildReportEmailHtml(input: { targetName: string; reportDate: string; c
 
       <div style="background:#ffffff;border:1px solid #e8ebf4;border-radius:18px;box-shadow:0 16px 40px rgba(17,25,54,.08);padding:14px;margin-top:12px">
         <div class="table-wrap" style="width:100%;overflow-x:auto">
-          <table class="report-table" role="table" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;min-width:980px;font-size:14px;color:#202847">
+          <table class="report-table" role="table" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;min-width:${Math.max(620, input.columns.length * 145)}px;font-size:14px;color:#202847">
             <thead>
-              <tr>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;border-top-left-radius:12px;text-align:left;width:42px"></th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:left">Nombre</th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Hora real de<br>registro de entrada</th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Hora real de<br>registro de salida</th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Grabacion de<br>asistencia</th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Duracion de<br>la pausa</th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:center">Registros de<br>descansos</th>
-                <th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;border-top-right-radius:12px;text-align:center">Estado / Observacion</th>
-              </tr>
+              <tr>${headers}</tr>
             </thead>
             <tbody>${rows}${emptyRows}</tbody>
           </table>
@@ -384,23 +527,44 @@ function buildReportEmailHtml(input: { targetName: string; reportDate: string; c
 </html>`;
 }
 
-function reportEmailRowHtml(item: any) {
+function reportEmailHeaderHtml(column: ReportColumnKey) {
+  const labels: Record<ReportColumnKey, string> = {
+    name: "Nombre",
+    department: "Departamento",
+    schedule: "Grupo / horario",
+    actual_check_in: "Entrada real",
+    actual_check_out: "Salida real",
+    attendance_log: "Grabación de asistencia",
+    break_duration: "Duración de pausa",
+    break_records: "Registros de descansos",
+    status: "Estado / observación",
+    events: "Eventos / detalle"
+  };
+  return `<th style="padding:16px 14px;background:#f7f6ff;color:#4f46ff;font-weight:800;text-align:${column === "name" || column === "department" ? "left" : "center"}">${escapeHtml(labels[column])}</th>`;
+}
+
+function reportEmailRowHtml(item: any, columns: ReportColumnKey[]) {
   const checkIn = formatReportEmailTime(item.actual_check_in);
   const checkOut = formatReportEmailTime(item.actual_check_out);
   const attendanceLog = `${checkIn === "-" ? "Ninguno" : checkIn} / ${checkOut === "-" ? "Ninguno" : checkOut}`;
   const breakMinutes = Number(item.lunch_minutes ?? 0);
   const breakDuration = breakMinutes > 0 ? minutesToDuration(breakMinutes) : "-";
   const breaks = reportBreakRecordsHtml(item, breakMinutes);
-  return `<tr>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;color:#4f46ff;font-size:18px;text-align:center">&#9817;</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;color:#202847;font-weight:500">${escapeHtml(item.employee_name)}</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${reportTimeCell(checkIn, item.classification.check_in_status)}</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${reportTimeCell(checkOut, item.classification.check_out_status)}</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${escapeHtml(attendanceLog)}</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${reportDurationPill(breakDuration, item.classification.break_status)}</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center">${breaks}</td>
-    <td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:center;white-space:nowrap">${reportStatusPill(item)} <span style="display:inline-block;margin-left:10px;padding:8px 18px;border:1px solid #d8d6ff;border-radius:8px;color:#4f46ff;font-weight:700;background:#fff">Ver detalle</span> <span style="display:inline-block;margin-left:10px;color:#111936;font-size:18px;vertical-align:middle">&#8942;</span></td>
-  </tr>`;
+  const cells: Record<ReportColumnKey, string> = {
+    name: `<span style="color:#202847;font-weight:600">${escapeHtml(item.employee_name)}</span>`,
+    department: escapeHtml(item.department || "-"),
+    schedule: escapeHtml(item.schedule || "-"),
+    actual_check_in: reportTimeCell(checkIn, item.classification.check_in_status),
+    actual_check_out: reportTimeCell(checkOut, item.classification.check_out_status),
+    attendance_log: escapeHtml(attendanceLog),
+    break_duration: reportDurationPill(breakDuration, item.classification.break_status),
+    break_records: breaks,
+    status: reportStatusPill(item),
+    events: escapeHtml(item.observations || "Sin observaciones")
+  };
+  return `<tr>${columns.map((column) =>
+    `<td style="padding:13px 14px;border-top:1px solid #edf0f7;text-align:${column === "name" || column === "department" ? "left" : "center"}">${cells[column]}</td>`
+  ).join("")}</tr>`;
 }
 
 function reportBreakRecordsHtml(item: any, totalMinutes: number) {
@@ -533,10 +697,19 @@ function basicSummaryHtml(target: string, date: string, counts: any) {
   return `<p>Reporte de asistencia de <strong>${escapeHtml(target)}</strong> para ${date}.</p><p>Total: ${counts.total}. Correctos: ${counts.ok}. Alertas: ${counts.warnings}. Infracciones: ${counts.violations}.</p>`;
 }
 
-function targetLabel(config: any) {
-  const branch = one(config.branches)?.name ?? "Sucursal";
+function targetLabel(config: any, branches: ReportBranchTarget[]) {
+  const branchNames = branches.map((branch) => branch.name).filter(Boolean);
   const department = one(config.departments)?.name;
-  return department ? `${branch} / ${department}` : branch;
+  if (config.scope_type === "global") return "Reporte global";
+  if (config.scope_type === "company") return one(config.companies)?.name ?? "Empresa completa";
+  if (config.scope_type === "region") return `Región ${one(config.attendance_report_regions)?.name ?? ""}`.trim();
+  if (config.scope_type === "department") {
+    const suffix = branchNames.length === 1 ? ` / ${branchNames[0]}` : "";
+    return `${department ?? "Departamento"}${suffix}`;
+  }
+  if (branchNames.length === 1) return branchNames[0]!;
+  if (branchNames.length > 1) return `${branchNames.length} sucursales`;
+  return one(config.branches)?.name ?? "Alcance sin sucursales";
 }
 
 function one(value: any) {

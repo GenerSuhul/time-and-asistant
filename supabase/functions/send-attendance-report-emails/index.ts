@@ -2,6 +2,7 @@ import { z } from "https://esm.sh/zod@3.24.2";
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { requireRole } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/supabase.ts";
+import { transitionRun } from "../_shared/attendance-report-service.ts";
 
 const schema = z.object({
   limit: z.number().int().min(1).max(50).default(10),
@@ -58,7 +59,7 @@ async function deliver(supabase: any, apiKey: string, outbox: any) {
   await supabase.from("email_delivery_logs").insert({
     outbox_id: outbox.id, report_run_id: outbox.report_run_id, attempt, status: "processing", provider: "resend"
   });
-  await supabase.from("attendance_report_runs").update({ status: "sending" }).eq("id", outbox.report_run_id);
+  await transitionRun(supabase, outbox.report_run_id, "sending", `Enviando correo (intento ${attempt})`);
   try {
     const attachments = [];
     if (outbox.attachment_path) {
@@ -85,12 +86,21 @@ async function deliver(supabase: any, apiKey: string, outbox: any) {
       status: "sent", retry_count: attempt, provider_message_id: responseBody.id ?? null,
       last_error: null, sent_at: sentAt, locked_at: null
     }).eq("id", outbox.id);
-    await supabase.from("attendance_report_runs").update({ status: "sent", sent_at: sentAt, error_message: null }).eq("id", outbox.report_run_id);
+    const { data: reportRun } = await supabase.from("attendance_report_runs")
+      .select("sync_status").eq("id", outbox.report_run_id).single();
+    const finalStatus = reportRun?.sync_status && reportRun.sync_status !== "complete" ? "partial" : "sent";
+    await transitionRun(
+      supabase,
+      outbox.report_run_id,
+      finalStatus,
+      finalStatus === "partial" ? "Correo enviado con datos parciales de sincronización" : "Correo enviado",
+      { sent_at: sentAt, error_message: null }
+    );
     await supabase.from("email_delivery_logs").insert({
       outbox_id: outbox.id, report_run_id: outbox.report_run_id, attempt, status: "sent",
       provider: "resend", provider_message_id: responseBody.id ?? null, http_status: response.status
     });
-    return { outbox_id: outbox.id, status: "sent", provider_message_id: responseBody.id ?? null };
+    return { outbox_id: outbox.id, status: finalStatus, provider_message_id: responseBody.id ?? null };
   } catch (error) {
     const message = sanitizeError(error);
     const terminal = attempt >= Number(outbox.max_retries ?? 4);
@@ -99,9 +109,13 @@ async function deliver(supabase: any, apiKey: string, outbox: any) {
       status: terminal ? "failed" : "pending", retry_count: attempt,
       next_retry_at: nextRetry, last_error: message, locked_at: null
     }).eq("id", outbox.id);
-    await supabase.from("attendance_report_runs").update({
-      status: terminal ? "failed" : "queued", error_message: message
-    }).eq("id", outbox.report_run_id);
+    await transitionRun(
+      supabase,
+      outbox.report_run_id,
+      terminal ? "failed" : "queued",
+      terminal ? "Entrega fallida sin más reintentos" : `Entrega fallida; reintento ${attempt} programado`,
+      { error_message: message }
+    );
     await supabase.from("email_delivery_logs").insert({
       outbox_id: outbox.id, report_run_id: outbox.report_run_id, attempt,
       status: terminal ? "failed" : "retry_scheduled", provider: "resend",

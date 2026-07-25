@@ -2,10 +2,12 @@ import { z } from "https://esm.sh/zod@3.24.2";
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { requireRole } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/supabase.ts";
-import { generateAttendanceReport } from "../_shared/attendance-report-service.ts";
+import { generateAttendanceReport, transitionRun } from "../_shared/attendance-report-service.ts";
 
 const schema = z.object({
   report_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  config_id: z.string().uuid().optional(),
+  output_key: z.string().min(1).max(100).optional(),
   branch_id: z.string().uuid().optional(),
   department_id: z.string().uuid().optional(),
   dry_run: z.boolean().default(false),
@@ -27,7 +29,9 @@ Deno.serve(async (req) => {
     const message = error instanceof Error ? error.message : String(error);
     if (runId) {
       const supabase = serviceClient();
-      await supabase.from("attendance_report_runs").update({ status: "failed", error_message: message.slice(0, 1000) }).eq("id", runId);
+      await transitionRun(supabase, runId, "failed", "La generación del reporte falló", {
+        error_message: message.slice(0, 1000)
+      }).catch(() => undefined);
     }
     return jsonResponse({ error: message }, /Unauthorized/i.test(message) ? 401 : /Forbidden/i.test(message) ? 403 : 400);
   }

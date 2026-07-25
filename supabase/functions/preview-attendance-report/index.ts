@@ -6,9 +6,15 @@ import { generateAttendanceReport } from "../_shared/attendance-report-service.t
 
 const schema = z.object({
   report_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  branch_id: z.string().uuid(),
-  department_id: z.string().uuid().optional()
-}).strict();
+  config_id: z.string().uuid().optional(),
+  output_key: z.string().min(1).max(100).optional(),
+  branch_id: z.string().uuid().optional(),
+  department_id: z.string().uuid().optional(),
+  html_columns: z.record(z.boolean()).optional(),
+  column_order: z.array(z.string()).max(20).optional()
+}).strict().refine((value) => Boolean(value.config_id || value.branch_id), {
+  message: "config_id o branch_id es obligatorio"
+});
 
 Deno.serve(async (req) => {
   const options = handleOptions(req);

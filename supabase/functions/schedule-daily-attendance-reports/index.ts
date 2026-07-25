@@ -1,6 +1,7 @@
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { requireRole } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/supabase.ts";
+import { resolveConfigOutputs, transitionRun } from "../_shared/attendance-report-service.ts";
 
 const terminalSyncStatuses = ["complete", "partial", "failed"];
 
@@ -29,7 +30,9 @@ Deno.serve(async (req) => {
             .select("status,error_message").eq("id", run.sync_job_id).single();
           if (error) throw error;
           if (!terminalSyncStatuses.includes(syncJob.status)) continue;
-          await supabase.from("attendance_report_runs").update({ sync_status: syncJob.status }).eq("id", run.id);
+          await transitionRun(supabase, run.id, "generating", "Sincronización finalizada; iniciando generación", {
+            sync_status: syncJob.status
+          });
         }
         await invokeGenerator(supabase, run.id, run.report_date);
         runsAdvanced += 1;
@@ -39,48 +42,77 @@ Deno.serve(async (req) => {
     }
 
     const { data: configs, error: configsError } = await supabase.from("attendance_report_configs")
-      .select("*").eq("is_active", true).lte("send_time", `${clock.time}:59`);
+      .select("*,attendance_report_config_branches(branch_id)")
+      .eq("is_active", true).lte("send_time", `${clock.time}:59`);
     if (configsError) throw configsError;
     const syncByScope = new Map<string, any>();
     for (const config of configs ?? []) {
-      let createdRunId: string | null = null;
       try {
-        const { data: existing, error: existingError } = await supabase.from("attendance_report_runs")
-          .select("id").eq("config_id", config.id).eq("report_date", targetDate).maybeSingle();
-        if (existingError) throw existingError;
-        if (existing) continue;
-        const { data: run, error: runError } = await supabase.from("attendance_report_runs").insert({
-          config_id: config.id, report_date: targetDate, company_id: config.company_id,
-          branch_id: config.branch_id, department_id: config.department_id, status: "pending"
-        }).select("*").single();
-        if (runError) {
-          if (runError.code === "23505") continue;
-          throw runError;
-        }
-        createdRunId = run.id;
-        const scopeKey = `${targetDate}:${config.branch_id}`;
-        let syncJob = syncByScope.get(scopeKey);
-        if (!syncJob) {
-          syncJob = await findOrCreateSyncJob(supabase, targetDate, config.company_id, config.branch_id);
-          syncByScope.set(scopeKey, syncJob);
-        }
-        if (syncJob) {
-          await supabase.from("attendance_report_runs").update({ status: "syncing", sync_job_id: syncJob.id }).eq("id", run.id);
-          if (terminalSyncStatuses.includes(syncJob.status)) {
-            await supabase.from("attendance_report_runs").update({ sync_status: syncJob.status }).eq("id", run.id);
-            await invokeGenerator(supabase, run.id, targetDate);
-            runsAdvanced += 1;
+        const { branches, outputs } = await resolveConfigOutputs(supabase, config);
+        if (!outputs.length || !branches.length) throw new Error("El alcance no resuelve sucursales activas");
+        for (const output of outputs) {
+          let createdRunId: string | null = null;
+          try {
+            const { data: existing, error: existingError } = await supabase.from("attendance_report_runs")
+              .select("id").eq("config_id", config.id).eq("report_date", targetDate)
+              .eq("output_key", output.outputKey).maybeSingle();
+            if (existingError) throw existingError;
+            if (existing) continue;
+            const scopeBranches = branches.filter((branch) => output.branchIds.includes(branch.id));
+            const { data: run, error: runError } = await supabase.from("attendance_report_runs").insert({
+              config_id: config.id,
+              report_date: targetDate,
+              company_id: output.companyIds.length === 1 ? output.companyIds[0] : null,
+              branch_id: output.primaryBranchId,
+              branch_ids: output.branchIds,
+              output_key: output.outputKey,
+              department_id: config.department_id,
+              status: "pending",
+              status_detail: "Programado por el scheduler",
+              scope_snapshot: {
+                scope_type: config.scope_type, output_mode: config.output_mode,
+                output_key: output.outputKey, company_ids: output.companyIds,
+                branch_ids: output.branchIds, branch_names: scopeBranches.map((branch) => branch.name),
+                region_ids: output.regionIds, department_id: config.department_id ?? null
+              },
+              columns_snapshot: { enabled: config.html_columns, order: config.column_order },
+              audit_log: [{ status: "pending", detail: "Programado por el scheduler", at: new Date().toISOString() }]
+            }).select("*").single();
+            if (runError) {
+              if (runError.code === "23505") continue;
+              throw runError;
+            }
+            createdRunId = run.id;
+            const scopeKey = `${targetDate}:${[...output.branchIds].sort().join(",")}`;
+            let syncJob = syncByScope.get(scopeKey);
+            if (!syncJob) {
+              syncJob = await findOrCreateSyncJob(supabase, targetDate, output.companyIds, output.branchIds);
+              syncByScope.set(scopeKey, syncJob);
+            }
+            if (syncJob) {
+              await transitionRun(supabase, run.id, "syncing", "Esperando sincronización de dispositivos", { sync_job_id: syncJob.id });
+              if (terminalSyncStatuses.includes(syncJob.status)) {
+                await transitionRun(supabase, run.id, "generating", "Sincronización finalizada; iniciando generación", { sync_status: syncJob.status });
+                await invokeGenerator(supabase, run.id, targetDate);
+                runsAdvanced += 1;
+              }
+            } else {
+              await invokeGenerator(supabase, run.id, targetDate);
+              runsAdvanced += 1;
+            }
+            runsCreated += 1;
+          } catch (error) {
+            const message = sanitizeError(error);
+            if (createdRunId) {
+              await transitionRun(supabase, createdRunId, "failed", "El scheduler no pudo avanzar la ejecución", {
+                error_message: message
+              }).catch(() => undefined);
+            }
+            errors.push(`config ${config.id} output ${output.outputKey}: ${message}`);
           }
-        } else {
-          await invokeGenerator(supabase, run.id, targetDate);
-          runsAdvanced += 1;
         }
-        runsCreated += 1;
       } catch (error) {
         const message = sanitizeError(error);
-        if (createdRunId) {
-          await supabase.from("attendance_report_runs").update({ status: "failed", error_message: message }).eq("id", createdRunId);
-        }
         errors.push(`config ${config.id}: ${message}`);
       }
     }
@@ -100,9 +132,9 @@ Deno.serve(async (req) => {
   }
 });
 
-async function findOrCreateSyncJob(supabase: any, date: string, companyId: string, branchId: string) {
+async function findOrCreateSyncJob(supabase: any, date: string, companyIds: string[], branchIds: string[]) {
   const { data: devices, error: devicesError } = await supabase.from("devices")
-    .select("id").eq("branch_id", branchId).eq("protocol", "hik_devicegateway").not("dev_index", "is", null);
+    .select("id").in("branch_id", branchIds).eq("protocol", "hik_devicegateway").not("dev_index", "is", null);
   if (devicesError) throw devicesError;
   const deviceIds = (devices ?? []).map((device: any) => device.id).sort();
   if (!deviceIds.length) return null;
@@ -115,7 +147,7 @@ async function findOrCreateSyncJob(supabase: any, date: string, companyId: strin
   if (existing) return existing;
   const now = new Date().toISOString();
   const { data, error } = await supabase.from("attendance_sync_jobs").insert({
-    date, company_ids: [companyId], device_ids: deviceIds, requested_by: null,
+    date, company_ids: companyIds, device_ids: deviceIds, requested_by: null,
     force: true, status: "pending", stage: "queued", progress: 0,
     devices_total: deviceIds.length, edge_received_at: now, queued_at: now,
     timing: { source: "automatic_attendance_report" }

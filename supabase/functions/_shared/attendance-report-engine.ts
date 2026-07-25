@@ -1,5 +1,35 @@
 export type UnitType = "store" | "administration" | "department";
 export type ReportSeverity = "ok" | "warning" | "violation";
+export type ReportScopeType = "global" | "company" | "region" | "branches" | "branch" | "department";
+export type ReportOutputMode = "consolidated" | "separate_by_branch";
+export type ReportColumnKey =
+  | "name"
+  | "department"
+  | "schedule"
+  | "actual_check_in"
+  | "actual_check_out"
+  | "attendance_log"
+  | "break_duration"
+  | "break_records"
+  | "status"
+  | "events";
+
+export const REPORT_COLUMN_DEFINITIONS: ReadonlyArray<{ key: ReportColumnKey; label: string }> = [
+  { key: "name", label: "Nombre" },
+  { key: "department", label: "Departamento" },
+  { key: "schedule", label: "Grupo / horario" },
+  { key: "actual_check_in", label: "Entrada real" },
+  { key: "actual_check_out", label: "Salida real" },
+  { key: "attendance_log", label: "Grabación de asistencia" },
+  { key: "break_duration", label: "Duración de pausa" },
+  { key: "break_records", label: "Registros de descansos" },
+  { key: "status", label: "Estado / observación" },
+  { key: "events", label: "Eventos / detalle" }
+];
+
+export const DEFAULT_REPORT_COLUMNS: Record<ReportColumnKey, boolean> = Object.fromEntries(
+  REPORT_COLUMN_DEFINITIONS.map(({ key }) => [key, true])
+) as Record<ReportColumnKey, boolean>;
 
 export type AttendanceRule = {
   expected_check_in: string;
@@ -26,8 +56,12 @@ export type AttendanceClassification = {
 export type ReportContact = {
   email: string;
   role: string;
+  company_id?: string | null;
+  scope_type?: ReportScopeType | null;
   branch_id?: string | null;
+  branch_ids?: string[];
   department_id?: string | null;
+  region_id?: string | null;
   region?: string | null;
   is_active: boolean;
   receives_store_reports: boolean;
@@ -36,9 +70,13 @@ export type ReportContact = {
 };
 
 export type RecipientContext = {
-  unitType: UnitType;
-  branchId: string;
+  unitType: UnitType | "mixed";
+  companyIds?: string[];
+  branchIds?: string[];
+  regionIds?: string[];
+  branchId?: string | null;
   departmentId?: string | null;
+  regionId?: string | null;
   region?: string | null;
   hasViolations: boolean;
   hasWarnings: boolean;
@@ -48,6 +86,22 @@ export type RecipientContext = {
 };
 
 export type ResolvedRecipients = { to: string[]; cc: string[] };
+
+export type ReportBranchTarget = {
+  id: string;
+  company_id: string;
+  region_id?: string | null;
+  name?: string;
+  unit_type?: "store" | "administration";
+};
+
+export type ReportOutput = {
+  outputKey: string;
+  branchIds: string[];
+  companyIds: string[];
+  regionIds: string[];
+  primaryBranchId: string | null;
+};
 
 export function classifyAttendance(input: AttendanceInput, rule: AttendanceRule): AttendanceClassification {
   const codes: string[] = [];
@@ -117,12 +171,9 @@ export function resolveReportRecipients(contacts: ReportContact[], context: Reci
     if (!contact.is_active || !validEmail(contact.email)) return false;
     const warningExplicitlyTriggersHr = contact.role === "hr_manager" && context.hasWarnings && context.warningsTriggerHrCopy;
     if (contact.only_on_violation && !context.hasViolations && !warningExplicitlyTriggersHr) return false;
-    if (context.unitType === "store" && !contact.receives_store_reports) return false;
-    if (context.unitType !== "store" && !contact.receives_administration_reports) return false;
-    if (contact.department_id && contact.department_id !== context.departmentId) return false;
-    if (contact.branch_id && contact.branch_id !== context.branchId) return false;
-    if (contact.region && normalize(contact.region) !== normalize(context.region)) return false;
-    return true;
+    if ((context.unitType === "store" || context.unitType === "mixed") && !contact.receives_store_reports) return false;
+    if ((context.unitType !== "store") && !contact.receives_administration_reports) return false;
+    return contactCoversOutput(contact, context);
   });
   const byRole = (role: string) => eligible.filter((contact) => contact.role === role).map((contact) => normalizeEmail(contact.email));
   let to: string[] = [];
@@ -143,10 +194,75 @@ export function resolveReportRecipients(contacts: ReportContact[], context: Reci
     : true;
   if (copyHr) cc.push(...byRole("hr_manager"));
 
+  // A report must always have a primary recipient. Corporate HR is a safe
+  // fallback only when its explicit scope covers the complete output.
+  if (to.length === 0) {
+    to.push(...byRole("hr_assistant"));
+    if (copyHr) to.push(...byRole("hr_manager"));
+  }
+
   to = uniqueEmails(to);
   const toSet = new Set(to);
   cc = uniqueEmails(cc).filter((email) => !toSet.has(email));
   return { to, cc };
+}
+
+export function contactCoversOutput(contact: ReportContact, context: RecipientContext) {
+  const branchIds = uniqueStrings(context.branchIds ?? (context.branchId ? [context.branchId] : []));
+  const companyIds = uniqueStrings(context.companyIds ?? []);
+  const regionIds = uniqueStrings(context.regionIds ?? (context.regionId ? [context.regionId] : []));
+  const contactBranches = uniqueStrings(contact.branch_ids ?? (contact.branch_id ? [contact.branch_id] : []));
+  const scope = contact.scope_type ?? legacyContactScope(contact);
+
+  if (scope === "global") return true;
+  if (!contact.company_id || companyIds.length === 0 || companyIds.some((id) => id !== contact.company_id)) return false;
+  if (scope === "company") return true;
+  if (scope === "region") {
+    if (contact.region_id) return regionIds.length === 1 && regionIds[0] === contact.region_id;
+    return Boolean(contact.region) && normalize(contact.region) === normalize(context.region);
+  }
+  if (scope === "branches" || scope === "branch") {
+    return branchIds.length > 0 && branchIds.every((id) => contactBranches.includes(id));
+  }
+  if (scope === "department") {
+    if (!contact.department_id || contact.department_id !== context.departmentId) return false;
+    return contactBranches.length === 0 || (branchIds.length > 0 && branchIds.every((id) => contactBranches.includes(id)));
+  }
+  return false;
+}
+
+export function resolveReportOutputs(branches: ReportBranchTarget[], mode: ReportOutputMode): ReportOutput[] {
+  const uniqueBranches = [...new Map(branches.map((branch) => [branch.id, branch])).values()]
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (mode === "separate_by_branch") {
+    return uniqueBranches.map((branch) => ({
+      outputKey: branch.id,
+      branchIds: [branch.id],
+      companyIds: [branch.company_id],
+      regionIds: branch.region_id ? [branch.region_id] : [],
+      primaryBranchId: branch.id
+    }));
+  }
+  return [{
+    outputKey: "consolidated",
+    branchIds: uniqueBranches.map((branch) => branch.id),
+    companyIds: uniqueStrings(uniqueBranches.map((branch) => branch.company_id)),
+    regionIds: uniqueStrings(uniqueBranches.map((branch) => branch.region_id).filter(Boolean) as string[]),
+    primaryBranchId: uniqueBranches.length === 1 ? uniqueBranches[0].id : null
+  }];
+}
+
+export function normalizeReportColumns(
+  enabled?: Partial<Record<ReportColumnKey, boolean>> | null,
+  requestedOrder?: string[] | null
+): ReportColumnKey[] {
+  const known = new Set(REPORT_COLUMN_DEFINITIONS.map(({ key }) => key));
+  const order = uniqueStrings([
+    ...(requestedOrder ?? []),
+    ...REPORT_COLUMN_DEFINITIONS.map(({ key }) => key)
+  ]).filter((key): key is ReportColumnKey => known.has(key as ReportColumnKey));
+  const selected = order.filter((key) => (enabled?.[key] ?? DEFAULT_REPORT_COLUMNS[key]) !== false);
+  return selected.length > 0 ? selected : ["name"];
 }
 
 export function validEmail(value: string) {
@@ -159,6 +275,17 @@ function normalizeEmail(value: string) {
 
 function uniqueEmails(values: string[]) {
   return [...new Set(values.map(normalizeEmail).filter(validEmail))];
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function legacyContactScope(contact: ReportContact): ReportScopeType {
+  if (contact.department_id) return "department";
+  if (contact.branch_id) return "branch";
+  if (contact.region_id || contact.region) return "region";
+  return contact.company_id ? "company" : "global";
 }
 
 function normalize(value: string | null | undefined) {
