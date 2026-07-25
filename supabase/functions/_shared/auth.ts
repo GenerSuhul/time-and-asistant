@@ -52,9 +52,9 @@ export async function requireRole(req: Request, supabase: SupabaseClientLike, al
     .eq("user_id", actor.user_id);
   if (error) throw error;
 
-  const hasRole = (data ?? []).some((row) => {
+  const hasRole = (data ?? []).some((row: any) => {
     const roles = Array.isArray(row.roles) ? row.roles : [row.roles];
-    return roles.some((role) => role?.key && allowedRoles.includes(role.key));
+    return roles.some((role: any) => role?.key && allowedRoles.includes(role.key));
   });
   if (!hasRole) throw new Error("Forbidden: missing required role");
   return actor;

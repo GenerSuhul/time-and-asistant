@@ -37,6 +37,7 @@ async function assertRolesExist(supabase: ReturnType<typeof serviceClient>, role
   if ((data ?? []).length !== new Set(roleIds).size) {
     throw new Error("Solo se pueden asignar los roles IT o RRHH.");
   }
+  return data ?? [];
 }
 
 async function assertDoesNotRemoveLastItAdmin(
@@ -69,7 +70,8 @@ async function replaceRoles(
   roleIds: string[],
   companyId: string | null | undefined
 ) {
-  await assertRolesExist(supabase, roleIds);
+  const roles = await assertRolesExist(supabase, roleIds);
+  const roleScope = roles.some((role) => role.key === "it_admin") ? null : companyId ?? null;
 
   const { error: deleteError } = await supabase.from("user_roles").delete().eq("user_id", userId);
   if (deleteError) throw deleteError;
@@ -77,7 +79,7 @@ async function replaceRoles(
   const rows = roleIds.map((role_id) => ({
     user_id: userId,
     role_id,
-    company_id: companyId ?? null
+    company_id: roleScope
   }));
   const { error: insertError } = await supabase.from("user_roles").insert(rows);
   if (insertError) throw insertError;

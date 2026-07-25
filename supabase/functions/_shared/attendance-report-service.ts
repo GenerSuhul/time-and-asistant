@@ -36,7 +36,7 @@ export async function generateAttendanceReport(supabase: any, input: GenerateInp
   const rows = await loadAttendanceRows(supabase, reportDate, config.branch_id, config.department_id);
   const rule = one(config.attendance_report_rules);
   if (!rule) throw new Error("La configuración no tiene una regla de asistencia válida");
-  const items = rows.map((row: any) => toReportItem(row, rule));
+  const items: ReturnType<typeof toReportItem>[] = rows.map((row: any) => toReportItem(row, rule));
   const counts = {
     total: items.length,
     ok: items.filter((item) => item.classification.severity === "ok").length,
@@ -248,7 +248,7 @@ async function buildWorkbook(items: any[], target: string, reportDate: string) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Hikvision Attendance";
   const sheet = workbook.addWorksheet("Asistencia", { views: [{ state: "frozen", ySplit: 1 }] });
-  sheet.columns = [
+  const columns: Array<[string, string, number]> = [
     ["Departamento", "department", 22], ["Sucursal", "branch", 24],
     ["Nombre", "employee_name", 28], ["Código empleado", "employee_code", 16], ["Fecha", "date", 14],
     ["Horario", "schedule", 20], ["Entrada esperada", "expected_check_in", 18], ["Entrada real", "actual_check_in", 18],
@@ -256,7 +256,8 @@ async function buildWorkbook(items: any[], target: string, reportDate: string) {
     ["Duración pausa", "lunch_minutes", 16], ["Estado pausa", "break_status", 16], ["Salida esperada", "expected_check_out", 18],
     ["Salida real", "actual_check_out", 18], ["Estado salida", "check_out_status", 16], ["Estado general", "general_status", 18],
     ["Observaciones", "observations", 44]
-  ].map(([header, key, width]) => ({ header, key, width }));
+  ];
+  sheet.columns = columns.map(([header, key, width]) => ({ header, key, width }));
   sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
   sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF374151" } };
   for (const item of items) {

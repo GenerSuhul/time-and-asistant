@@ -18,6 +18,8 @@ export type AppPermission =
   | "users"
   | "settings";
 
+// Legacy aliases keep rolling deploys safe until the role-removal migration
+// runs. After it runs, the database no longer retains or assigns these roles.
 const itRoles = new Set(["it_admin", "super_admin"]);
 const hrRoles = new Set(["hr_admin", "branch_manager"]);
 const itOnlyPermissions = new Set<AppPermission>([

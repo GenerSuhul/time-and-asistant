@@ -4,12 +4,13 @@ Fecha: 2026-07-23
 
 La plataforma expone dos roles asignables:
 
-- `it_admin` / **IT**: acceso completo.
+- `it_admin` / **IT**: acceso completo y siempre global.
 - `hr_admin` / **RRHH**: operación completa de personas, horarios,
   asignaciones, credenciales, asistencia y reportes.
 
-Los registros de roles antiguos se conservan únicamente por historial. La
-interfaz y `admin-users` no permiten volver a asignarlos.
+Los roles de plataforma anteriores se migran y eliminan. La tabla `roles`
+conserva únicamente `it_admin` y `hr_admin`; el rol IT no admite alcance por
+empresa, mientras RRHH conserva el alcance global o por empresa ya definido.
 
 | Módulo o capacidad | IT | RRHH |
 |---|---:|---:|

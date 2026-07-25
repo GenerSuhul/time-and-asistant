@@ -142,6 +142,8 @@ export function UsersPage() {
       };
     }
   });
+  const selectedRole = query.data?.roles.find((role) => form.role_ids.includes(role.id));
+  const itRoleSelected = selectedRole?.key === "it_admin";
 
   const save = useMutation({
     mutationFn: async () => {
@@ -151,7 +153,7 @@ export function UsersPage() {
         full_name: form.full_name.trim(),
         status: form.status,
         company_id: form.company_id || null,
-        role_company_id: form.role_company_id || null,
+        role_company_id: itRoleSelected ? null : form.role_company_id || null,
         role_ids: form.role_ids
       };
       if (editing) {
@@ -217,14 +219,17 @@ export function UsersPage() {
   }
 
   function toggleRole(roleId: string) {
+    const role = query.data?.roles.find((item) => item.id === roleId);
     setForm((current) => ({
       ...current,
-      role_ids: current.role_ids.includes(roleId) ? [] : [roleId]
+      role_ids: current.role_ids.includes(roleId) ? [] : [roleId],
+      role_company_id: role?.key === "it_admin" ? "" : current.role_company_id
     }));
   }
 
   function startEdit(user: UserRow) {
     const firstAssignment = user.roleAssignments[0];
+    const firstRole = normalizeRole(firstAssignment?.roles ?? null);
     setEditing(user);
     setForm({
       id: user.id,
@@ -233,7 +238,7 @@ export function UsersPage() {
       full_name: user.full_name ?? "",
       status: user.status ?? "active",
       company_id: user.company_id ?? "",
-      role_company_id: firstAssignment?.company_id ?? "",
+      role_company_id: firstRole?.key === "it_admin" ? "" : firstAssignment?.company_id ?? "",
       role_ids: user.roleAssignments.map((assignment) => normalizeRole(assignment.roles)?.id).filter(Boolean) as string[]
     });
     setOpen(true);
@@ -412,8 +417,9 @@ export function UsersPage() {
                 select
                 label="Alcance de roles"
                 fullWidth
-                value={form.role_company_id}
-                helperText="Global aplica a todas las empresas."
+                value={itRoleSelected ? "" : form.role_company_id}
+                disabled={itRoleSelected}
+                helperText={itRoleSelected ? "IT siempre tiene alcance global." : "RRHH puede ser global o limitarse a una empresa."}
                 onChange={(event) => setForm((current) => ({ ...current, role_company_id: event.target.value }))}
               >
                 <MenuItem value="">Global</MenuItem>
