@@ -28,7 +28,8 @@ const scheduleFields: CrudField[] = [
   { name: "applicable_unit_type", label: "Aplica a", type: "select", options: ["store", "administration", "department"], required: true, defaultValue: "store" },
   { name: "timezone", label: "Zona horaria", required: true, defaultValue: "America/Guatemala" },
   { name: "expected_check_in", label: "Entrada esperada", type: "time", required: true },
-  { name: "expected_check_out", label: "Salida esperada", type: "time", required: true },
+  { name: "expected_check_out", label: "Salida esperada (otros días)", type: "time", required: true },
+  { name: "saturday_expected_check_out", label: "Salida mínima sábado", type: "time", required: true, defaultValue: "13:00", helperText: "El sábado conserva la misma entrada; salir antes de esta hora se considera salida temprana." },
   { name: "max_break_minutes", label: "Pausa máxima (min)", type: "number", required: true, defaultValue: 60 },
   { name: "check_in_tolerance_minutes", label: "Tolerancia entrada (min)", type: "number", defaultValue: 0 },
   { name: "check_out_tolerance_minutes", label: "Tolerancia salida (min)", type: "number", defaultValue: 0 },
@@ -92,7 +93,7 @@ export function BranchesPage() {
 }
 
 export function WorkSchedulesPage() {
-  return <CrudPage title="Horarios y reglas de asistencia" table="attendance_report_rules" select="*, companies:company_id(name)" fields={scheduleFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "applicable_unit_type", label: "Aplica a" }, { name: "expected_check_in", label: "Entrada" }, { name: "expected_check_out", label: "Salida" }, { name: "max_break_minutes", label: "Pausa máxima" }, { name: "is_active", label: "Activo" }])} />;
+  return <CrudPage title="Horarios y reglas de asistencia" table="attendance_report_rules" select="*, companies:company_id(name)" fields={scheduleFields} columns={baseColumns([{ name: "name", label: "Nombre" }, { name: "companies.name", label: "Empresa" }, { name: "applicable_unit_type", label: "Aplica a" }, { name: "expected_check_in", label: "Entrada" }, { name: "expected_check_out", label: "Salida otros días" }, { name: "saturday_expected_check_out", label: "Salida sábado" }, { name: "max_break_minutes", label: "Pausa máxima" }, { name: "is_active", label: "Activo" }])} />;
 }
 
 export function EmployeesPage() {

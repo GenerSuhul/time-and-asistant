@@ -33,16 +33,44 @@ export async function generateAttendanceReport(supabase: any, input: GenerateInp
   const branches = await resolveConfigBranches(supabase, config, run?.branch_ids);
   const availableOutputs = resolveReportOutputs(branches, config.output_mode ?? "consolidated");
   const output = selectOutput(availableOutputs, input.output_key ?? run?.output_key);
+  const selectedBranches = branches.filter((branch) => output.branchIds.includes(branch.id));
 
   if (!dryRun) {
     run = await ensureRun(supabase, run, config, reportDate, output, branches);
+    if (!(await hasFreshTerminalSync(supabase, run))) {
+      await prepareOutboxForRegeneration(supabase, run.id);
+      const syncJob = await enqueueFreshAttendanceReportSync(
+        supabase,
+        reportDate,
+        output.companyIds,
+        output.branchIds,
+        "attendance_report_generation"
+      );
+      if (syncJob) {
+        await transitionRun(supabase, run.id, "syncing", "Resincronizando dispositivos antes de generar y enviar", {
+          sync_job_id: syncJob.id,
+          sync_status: null,
+          generated_at: null,
+          sent_at: null,
+          error_message: null,
+          skipped_reason: null
+        });
+        return {
+          report_date: reportDate,
+          config_id: config.id,
+          output_key: output.outputKey,
+          run_id: run.id,
+          sync_job_id: syncJob.id,
+          queued_for_sync: true
+        };
+      }
+    }
     await transitionRun(supabase, run.id, "generating", "Generando reporte con datos de asistencia", {
       error_message: null,
       skipped_reason: null
     });
   }
 
-  const selectedBranches = branches.filter((branch) => output.branchIds.includes(branch.id));
   for (const branch of selectedBranches) {
     await calculateAttendanceForDate(supabase, {
       date: reportDate,
@@ -82,8 +110,7 @@ export async function generateAttendanceReport(supabase: any, input: GenerateInp
   });
   const targetName = targetLabel(config, selectedBranches);
   const syncStatus = run?.sync_status ?? null;
-  const partialSync = Boolean(syncStatus && syncStatus !== "complete");
-  const subject = `Reporte de asistencia${partialSync ? " parcial" : ""} - ${targetName} - ${reportDate}`;
+  const subject = `Reporte de asistencia - ${targetName} - ${reportDate}`;
   const selectedColumns = normalizeReportColumns(
     dryRun && input.html_columns ? input.html_columns : config.html_columns,
     dryRun && input.column_order ? input.column_order : config.column_order
@@ -245,6 +272,99 @@ export async function resolveConfigOutputs(supabase: any, config: any) {
   return { branches, outputs: resolveReportOutputs(branches, config.output_mode ?? "consolidated") };
 }
 
+export async function enqueueFreshAttendanceReportSync(
+  supabase: any,
+  date: string,
+  companyIds: string[],
+  branchIds: string[],
+  source: string
+) {
+  const deviceIds = await reportDeviceIds(supabase, branchIds);
+  if (!deviceIds.length) return null;
+  const { data: activeJobs, error: activeError } = await supabase.from("attendance_sync_jobs")
+    .select("*").eq("date", date).is("requested_by", null)
+    .in("status", ["pending", "processing", "calculating"])
+    .order("created_at", { ascending: false }).limit(20);
+  if (activeError) throw activeError;
+  const active = (activeJobs ?? []).find((job: any) => sameIds(job.device_ids, deviceIds));
+  if (active) return active;
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase.from("attendance_sync_jobs").insert({
+    date,
+    company_ids: companyIds,
+    device_ids: deviceIds,
+    requested_by: null,
+    force: true,
+    status: "pending",
+    stage: "queued",
+    progress: 0,
+    devices_total: deviceIds.length,
+    edge_received_at: now,
+    queued_at: now,
+    timing: { source }
+  }).select("*").single();
+  if (error) throw error;
+  return data;
+}
+
+async function reportDeviceIds(supabase: any, branchIds: string[]) {
+  if (!branchIds.length) return [];
+  const [directResult, linksResult] = await Promise.all([
+    supabase.from("devices").select("id").in("branch_id", branchIds)
+      .eq("protocol", "hik_devicegateway").not("dev_index", "is", null),
+    supabase.from("device_branches").select("device_id").in("branch_id", branchIds)
+  ]);
+  if (directResult.error) throw directResult.error;
+  if (linksResult.error) throw linksResult.error;
+  const linkedIds = [...new Set((linksResult.data ?? []).map((link: any) => link.device_id))];
+  let linkedDevices: any[] = [];
+  if (linkedIds.length) {
+    const { data, error } = await supabase.from("devices").select("id").in("id", linkedIds)
+      .eq("protocol", "hik_devicegateway").not("dev_index", "is", null);
+    if (error) throw error;
+    linkedDevices = data ?? [];
+  }
+  return [...new Set([...(directResult.data ?? []), ...linkedDevices].map((device: any) => device.id))].sort();
+}
+
+async function hasFreshTerminalSync(supabase: any, run: any) {
+  if (run.status !== "generating" || !run.sync_job_id || !["complete", "partial", "failed"].includes(run.sync_status)) {
+    return false;
+  }
+  const { data, error } = await supabase.from("attendance_sync_jobs")
+    .select("status,finished_at").eq("id", run.sync_job_id).single();
+  if (error) throw error;
+  return Boolean(data?.finished_at && ["complete", "partial", "failed"].includes(data.status));
+}
+
+async function prepareOutboxForRegeneration(supabase: any, runId: string) {
+  const { data, error } = await supabase.from("email_outbox")
+    .select("id,status").eq("report_run_id", runId).maybeSingle();
+  if (error) throw error;
+  if (data?.status === "processing") {
+    throw new Error("El correo ya se está enviando; espera a que termine antes de solicitar una nueva resincronización");
+  }
+  if (data?.status !== "pending") return;
+  const { data: cancelled, error: cancelError } = await supabase.from("email_outbox").update({
+    status: "cancelled",
+    locked_at: null,
+    last_error: "Cancelado para resincronizar y regenerar el reporte"
+  }).eq("id", data.id).eq("status", "pending").select("id");
+  if (cancelError) throw cancelError;
+  if (cancelled?.length) return;
+  const { data: current, error: currentError } = await supabase.from("email_outbox")
+    .select("status").eq("id", data.id).single();
+  if (currentError) throw currentError;
+  if (current.status === "processing") {
+    throw new Error("El correo empezó a enviarse; espera a que termine antes de solicitar una nueva resincronización");
+  }
+}
+
+function sameIds(left: string[], right: string[]) {
+  return [...(left ?? [])].sort().join(",") === [...right].sort().join(",");
+}
+
 async function loadRun(supabase: any, id: string) {
   const { data, error } = await supabase.from("attendance_report_runs").select("*").eq("id", id).single();
   if (error) throw error;
@@ -310,7 +430,12 @@ async function loadContacts(supabase: any): Promise<ReportContact[]> {
 
 function toReportItem(row: any, rule: any) {
   const employee = one(row.employees) ?? {};
-  const classification = classifyAttendance(row, rule);
+  const effectiveRule = {
+    ...rule,
+    expected_check_in: row.expected_check_in ?? rule.expected_check_in,
+    expected_check_out: row.expected_check_out ?? rule.expected_check_out
+  };
+  const classification = classifyAttendance(row, effectiveRule);
   return {
     id: row.id,
     department: one(employee.departments)?.name ?? "",
@@ -319,13 +444,14 @@ function toReportItem(row: any, rule: any) {
     employee_code: employee.employee_code ?? "",
     date: row.attendance_date,
     schedule: one(row.attendance_report_rules)?.name ?? "",
-    expected_check_in: rule.expected_check_in,
+    expected_check_in: effectiveRule.expected_check_in,
     actual_check_in: row.actual_check_in,
     lunch_out: row.lunch_out,
     lunch_in: row.lunch_in,
     lunch_minutes: row.lunch_minutes ?? 0,
     break_records: Array.isArray(row.break_records) ? row.break_records : [],
-    expected_check_out: rule.expected_check_out,
+    worked_minutes: row.worked_minutes ?? 0,
+    expected_check_out: effectiveRule.expected_check_out,
     actual_check_out: row.actual_check_out,
     classification,
     observations: classification.codes.map(codeLabel).join(", ")
@@ -445,9 +571,6 @@ function buildReportEmailHtml(input: {
   const rows = input.items.map((item) => reportEmailRowHtml(item, input.columns)).join("");
   const headers = input.columns.map((column) => reportEmailHeaderHtml(column)).join("");
   const emptyRows = input.items.length === 0 ? `<tr><td colspan="${input.columns.length}" style="padding:28px;text-align:center;color:#8b94a7;border-top:1px solid #edf0f7">No hay registros de asistencia para este reporte.</td></tr>` : "";
-  const syncMessage = input.syncStatus && input.syncStatus !== "complete" ? `<div style="margin:0 30px 18px 30px;padding:14px 16px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:14px;line-height:1.45">
-    <strong>Reporte parcial:</strong> algunos dispositivos no respondieron correctamente. El reporte contiene la informacion disponible.
-  </div>` : "";
   const violationMessage = input.hasViolations ? `<div style="margin:0 30px 18px 30px;padding:14px 16px;border-radius:12px;background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;font-size:14px;line-height:1.45">
     <strong>Se detectaron alertas de asistencia.</strong> Por favor revisar los colaboradores marcados y responder con la justificacion correspondiente cuando aplique.
   </div>` : "";
@@ -508,7 +631,6 @@ function buildReportEmailHtml(input: {
         </table>
       </div>
 
-      ${syncMessage}
       ${violationMessage}
 
       <div style="background:#ffffff;border:1px solid #e8ebf4;border-radius:18px;box-shadow:0 16px 40px rgba(17,25,54,.08);padding:14px;margin-top:12px">
@@ -537,6 +659,7 @@ function reportEmailHeaderHtml(column: ReportColumnKey) {
     attendance_log: "Grabación de asistencia",
     break_duration: "Duración de pausa",
     break_records: "Registros de descansos",
+    worked_period: "Periodo de tiempo",
     status: "Estado / observación",
     events: "Eventos / detalle"
   };
@@ -559,6 +682,7 @@ function reportEmailRowHtml(item: any, columns: ReportColumnKey[]) {
     attendance_log: escapeHtml(attendanceLog),
     break_duration: reportDurationPill(breakDuration, item.classification.break_status),
     break_records: breaks,
+    worked_period: escapeHtml(formatWorkedPeriod(item.worked_minutes)),
     status: reportStatusPill(item),
     events: escapeHtml(item.observations || "Sin observaciones")
   };
@@ -671,6 +795,11 @@ function minutesToDuration(value: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function formatWorkedPeriod(value: unknown) {
+  const minutes = Number(value ?? 0);
+  return `${(Number.isFinite(minutes) ? minutes / 60 : 0).toFixed(2)}h`;
+}
+
 function buildBasicHtml(input: { targetName: string; reportDate: string; counts: any; items: any[]; hasViolations: boolean; syncStatus?: string | null }) {
   const rows = input.items.map((item) => `<tr>
     <td>${escapeHtml(item.employee_name)}</td><td>${escapeHtml(item.department)}</td>
@@ -682,13 +811,10 @@ function buildBasicHtml(input: { targetName: string; reportDate: string; counts:
     <p>Para los colaboradores involucrados, agradeceremos indicar el motivo de la llegada tarde, la salida temprana o la variación en la pausa.</p>
     <p>Si existió una situación excepcional (permiso, comisión, emergencia), por favor responder a este correo adjuntando la justificación correspondiente.</p>
   </div>` : "";
-  const syncMessage = input.syncStatus && input.syncStatus !== "complete" ? `<div style="padding:12px;background:#fef3c7;color:#78350f;margin:16px 0">
-    <strong>Reporte parcial:</strong> la resincronización de dispositivos finalizó con estado ${escapeHtml(input.syncStatus)}. El reporte contiene la información disponible y el detalle técnico quedó registrado.
-  </div>` : "";
   return `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937">
     <h2>Reporte de asistencia — ${escapeHtml(input.targetName)}</h2><p>Fecha: ${input.reportDate}</p>
     <p><strong>Total:</strong> ${input.counts.total} · <strong>Correctos:</strong> ${input.counts.ok} · <strong>Alertas:</strong> ${input.counts.warnings} · <strong>Infracciones:</strong> ${input.counts.violations}</p>
-    ${syncMessage}${violationMessage}<table cellpadding="7" cellspacing="0" border="1" style="border-collapse:collapse;font-size:13px">
+    ${violationMessage}<table cellpadding="7" cellspacing="0" border="1" style="border-collapse:collapse;font-size:13px">
     <thead><tr><th>Nombre</th><th>Departamento</th><th>Entrada</th><th>Salida</th><th>Pausa</th><th>Estado</th><th>Observaciones</th></tr></thead><tbody>${rows}</tbody></table>
     <p style="color:#6b7280;font-size:12px">Mensaje automático generado por Hikvision Attendance.</p></body></html>`;
 }

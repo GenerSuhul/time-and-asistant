@@ -1,7 +1,11 @@
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { requireRole } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/supabase.ts";
-import { resolveConfigOutputs, transitionRun } from "../_shared/attendance-report-service.ts";
+import {
+  enqueueFreshAttendanceReportSync,
+  resolveConfigOutputs,
+  transitionRun
+} from "../_shared/attendance-report-service.ts";
 
 const terminalSyncStatuses = ["complete", "partial", "failed"];
 
@@ -86,7 +90,13 @@ Deno.serve(async (req) => {
             const scopeKey = `${targetDate}:${[...output.branchIds].sort().join(",")}`;
             let syncJob = syncByScope.get(scopeKey);
             if (!syncJob) {
-              syncJob = await findOrCreateSyncJob(supabase, targetDate, output.companyIds, output.branchIds);
+              syncJob = await enqueueFreshAttendanceReportSync(
+                supabase,
+                targetDate,
+                output.companyIds,
+                output.branchIds,
+                "automatic_attendance_report"
+              );
               syncByScope.set(scopeKey, syncJob);
             }
             if (syncJob) {
@@ -132,30 +142,6 @@ Deno.serve(async (req) => {
   }
 });
 
-async function findOrCreateSyncJob(supabase: any, date: string, companyIds: string[], branchIds: string[]) {
-  const { data: devices, error: devicesError } = await supabase.from("devices")
-    .select("id").in("branch_id", branchIds).eq("protocol", "hik_devicegateway").not("dev_index", "is", null);
-  if (devicesError) throw devicesError;
-  const deviceIds = (devices ?? []).map((device: any) => device.id).sort();
-  if (!deviceIds.length) return null;
-  const { data: candidates, error: candidatesError } = await supabase.from("attendance_sync_jobs")
-    .select("*").eq("date", date).is("requested_by", null)
-    .in("status", ["pending", "processing", "calculating", "complete", "partial"])
-    .order("created_at", { ascending: false }).limit(20);
-  if (candidatesError) throw candidatesError;
-  const existing = (candidates ?? []).find((job: any) => sameIds(job.device_ids, deviceIds));
-  if (existing) return existing;
-  const now = new Date().toISOString();
-  const { data, error } = await supabase.from("attendance_sync_jobs").insert({
-    date, company_ids: companyIds, device_ids: deviceIds, requested_by: null,
-    force: true, status: "pending", stage: "queued", progress: 0,
-    devices_total: deviceIds.length, edge_received_at: now, queued_at: now,
-    timing: { source: "automatic_attendance_report" }
-  }).select("*").single();
-  if (error) throw error;
-  return data;
-}
-
 async function invokeGenerator(supabase: any, runId: string, reportDate: string) {
   const { data, error } = await supabase.functions.invoke("generate-attendance-report", {
     body: { report_date: reportDate, run_id: runId, dry_run: false }
@@ -177,10 +163,6 @@ function previousDate(date: string) {
   const value = new Date(`${date}T12:00:00Z`);
   value.setUTCDate(value.getUTCDate() - 1);
   return value.toISOString().slice(0, 10);
-}
-
-function sameIds(left: string[], right: string[]) {
-  return [...(left ?? [])].sort().join(",") === right.join(",");
 }
 
 function sanitizeError(error: unknown) {

@@ -1,3 +1,5 @@
+import { attendanceRuleForDate } from "./attendance-report-engine.ts";
+
 type SupabaseClientLike = any;
 
 type CalculateParams = {
@@ -79,10 +81,10 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
   const branchIds = [...new Set(employeeRows.map((employee: any) => employee.branch_id).filter(Boolean))];
 
   const globalRulesRequest = supabase.from("attendance_report_rules")
-    .select("id,company_id,applicable_unit_type,expected_check_in,expected_check_out,max_break_minutes,check_in_tolerance_minutes,check_out_tolerance_minutes,created_at")
+    .select("id,company_id,applicable_unit_type,expected_check_in,expected_check_out,saturday_expected_check_out,max_break_minutes,check_in_tolerance_minutes,check_out_tolerance_minutes,created_at")
     .is("company_id", null).eq("is_active", true);
   const companyRulesRequest = companyIds.length ? supabase.from("attendance_report_rules")
-    .select("id,company_id,applicable_unit_type,expected_check_in,expected_check_out,max_break_minutes,check_in_tolerance_minutes,check_out_tolerance_minutes,created_at")
+    .select("id,company_id,applicable_unit_type,expected_check_in,expected_check_out,saturday_expected_check_out,max_break_minutes,check_in_tolerance_minutes,check_out_tolerance_minutes,created_at")
     .in("company_id", companyIds).eq("is_active", true) : Promise.resolve({ data: [], error: null });
   const branchesRequest = branchIds.length ? supabase.from("branches").select("id,unit_type").in("id", branchIds) : Promise.resolve({ data: [], error: null });
   const configsRequest = branchIds.length ? supabase.from("attendance_report_configs").select("branch_id,department_id,rule_id")
@@ -123,9 +125,10 @@ export async function calculateAttendanceForDate(supabase: SupabaseClientLike, p
     const branch: any = branchById.get(employee.branch_id);
     const config: any = configByScope.get(`${employee.branch_id}:${employee.department_id ?? "*"}`) ?? configByScope.get(`${employee.branch_id}:*`);
     const unitType = branch?.unit_type ?? "store";
-    const rule: any = (config?.rule_id ? ruleById.get(config.rule_id) : null) ?? attendanceRules.find((candidate: any) =>
+    const configuredRule: any = (config?.rule_id ? ruleById.get(config.rule_id) : null) ?? attendanceRules.find((candidate: any) =>
       candidate.company_id === employee.company_id && candidate.applicable_unit_type === unitType) ?? attendanceRules.find((candidate: any) =>
       candidate.company_id === null && candidate.applicable_unit_type === unitType);
+    const rule: any = configuredRule ? attendanceRuleForDate(configuredRule, params.date) : null;
     const expectedCheckIn = rule?.expected_check_in ?? null;
     const expectedCheckOut = rule?.expected_check_out ?? null;
     const checkInTolerance = rule?.check_in_tolerance_minutes ?? 0;

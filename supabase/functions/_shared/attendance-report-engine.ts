@@ -11,6 +11,7 @@ export type ReportColumnKey =
   | "attendance_log"
   | "break_duration"
   | "break_records"
+  | "worked_period"
   | "status"
   | "events";
 
@@ -23,6 +24,7 @@ export const REPORT_COLUMN_DEFINITIONS: ReadonlyArray<{ key: ReportColumnKey; la
   { key: "attendance_log", label: "Grabación de asistencia" },
   { key: "break_duration", label: "Duración de pausa" },
   { key: "break_records", label: "Registros de descansos" },
+  { key: "worked_period", label: "Periodo de tiempo" },
   { key: "status", label: "Estado / observación" },
   { key: "events", label: "Eventos / detalle" }
 ];
@@ -34,6 +36,7 @@ export const DEFAULT_REPORT_COLUMNS: Record<ReportColumnKey, boolean> = Object.f
 export type AttendanceRule = {
   expected_check_in: string;
   expected_check_out: string;
+  saturday_expected_check_out?: string | null;
   max_break_minutes: number;
   check_in_tolerance_minutes?: number;
   check_out_tolerance_minutes?: number;
@@ -52,6 +55,11 @@ export type AttendanceClassification = {
   break_status: ReportSeverity;
   check_out_status: ReportSeverity;
 };
+
+export function attendanceRuleForDate(rule: AttendanceRule, date: string): AttendanceRule {
+  if (!isSaturday(date) || !rule.saturday_expected_check_out) return rule;
+  return { ...rule, expected_check_out: rule.saturday_expected_check_out };
+}
 
 export type ReportContact = {
   email: string;
@@ -307,4 +315,8 @@ function localMinutes(value: string) {
   const hours = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
   const minutes = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   return hours * 60 + minutes;
+}
+
+function isSaturday(date: string) {
+  return new Date(`${date}T12:00:00Z`).getUTCDay() === 6;
 }

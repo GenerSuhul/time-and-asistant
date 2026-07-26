@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  attendanceRuleForDate,
   classifyAttendance,
   contactCoversOutput,
   normalizeReportColumns,
@@ -28,6 +29,34 @@ test("administration boundary rules", () => {
   assert.equal(classifyAttendance({ actual_check_in: gt("07:00"), actual_check_out: gt("17:00"), lunch_minutes: 90 }, administration).check_in_status, "ok");
   assert.equal(classifyAttendance({ actual_check_in: gt("07:00"), actual_check_out: gt("17:00"), lunch_minutes: 91 }, administration).break_status, "violation");
   assert.equal(classifyAttendance({ actual_check_in: gt("07:00"), actual_check_out: gt("17:00"), lunch_minutes: 90 }, administration).break_status, "ok");
+});
+
+test("Saturday keeps the regular entry and requires check-out at 13:00 or later", () => {
+  const storeSaturday = attendanceRuleForDate(
+    { ...stores, saturday_expected_check_out: "13:00" },
+    "2026-07-25"
+  );
+  const administrationSaturday = attendanceRuleForDate(
+    { ...administration, saturday_expected_check_out: "13:00" },
+    "2026-07-25"
+  );
+  assert.equal(storeSaturday.expected_check_in, "06:50");
+  assert.equal(administrationSaturday.expected_check_in, "07:00");
+  assert.equal(storeSaturday.expected_check_out, "13:00");
+  assert.equal(administrationSaturday.expected_check_out, "13:00");
+  assert.equal(classifyAttendance({
+    actual_check_in: gt("06:50"), actual_check_out: gt("12:59"), lunch_minutes: 0
+  }, storeSaturday).check_out_status, "violation");
+  assert.equal(classifyAttendance({
+    actual_check_in: gt("06:50"), actual_check_out: gt("13:00"), lunch_minutes: 0
+  }, storeSaturday).check_out_status, "ok");
+  assert.equal(classifyAttendance({
+    actual_check_in: gt("07:00"), actual_check_out: gt("13:01"), lunch_minutes: 0
+  }, administrationSaturday).check_out_status, "ok");
+  assert.equal(attendanceRuleForDate(
+    { ...stores, saturday_expected_check_out: "13:00" },
+    "2026-07-24"
+  ).expected_check_out, "17:00");
 });
 
 test("missing marks are warnings, never violations", () => {
@@ -155,9 +184,13 @@ test("HTML column selection respects order and never produces an empty table", (
   ).slice(0, 2), ["actual_check_in", "name"]);
   const allDisabled = Object.fromEntries([
     "name","department","schedule","actual_check_in","actual_check_out","attendance_log",
-    "break_duration","break_records","status","events"
+    "break_duration","break_records","worked_period","status","events"
   ].map((key) => [key, false]));
   assert.deepEqual(normalizeReportColumns(allDisabled, []), ["name"]);
+  assert.ok(normalizeReportColumns(
+    { name: true },
+    ["name", "department", "schedule"]
+  ).includes("worked_period"));
 });
 
 function contact(email: string, role: string, onlyOnViolation = false, administrationOnly = false): ReportContact {

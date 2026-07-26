@@ -40,11 +40,7 @@ async function claimPending(supabase: any, limit: number) {
 
 async function claimSpecific(supabase: any, id: string, force: boolean) {
   if (force) {
-    const { error } = await supabase.from("email_outbox").update({
-      status: "pending", retry_count: 0, next_retry_at: new Date().toISOString(),
-      last_error: null, locked_at: null, provider_message_id: null, sent_at: null
-    }).eq("id", id);
-    if (error) throw error;
+    throw new Error("El reenvío directo está deshabilitado: primero resincroniza y regenera la ejecución del reporte");
   }
   const { data, error } = await supabase.from("email_outbox").update({
     status: "processing", locked_at: new Date().toISOString()
@@ -55,6 +51,7 @@ async function claimSpecific(supabase: any, id: string, force: boolean) {
 }
 
 async function deliver(supabase: any, apiKey: string, outbox: any) {
+  await assertReportWasGeneratedAfterSync(supabase, outbox.report_run_id);
   const attempt = Number(outbox.retry_count ?? 0) + 1;
   await supabase.from("email_delivery_logs").insert({
     outbox_id: outbox.id, report_run_id: outbox.report_run_id, attempt, status: "processing", provider: "resend"
@@ -124,6 +121,22 @@ async function deliver(supabase: any, apiKey: string, outbox: any) {
       metadata: terminal ? {} : { next_retry_at: nextRetry }
     });
     return { outbox_id: outbox.id, status: terminal ? "failed" : "retry_scheduled", error: message };
+  }
+}
+
+async function assertReportWasGeneratedAfterSync(supabase: any, reportRunId: string) {
+  const { data: run, error: runError } = await supabase.from("attendance_report_runs")
+    .select("sync_job_id,sync_status,generated_at").eq("id", reportRunId).single();
+  if (runError) throw runError;
+  if (!run.sync_job_id) return;
+  const { data: job, error: jobError } = await supabase.from("attendance_sync_jobs")
+    .select("status,finished_at").eq("id", run.sync_job_id).single();
+  if (jobError) throw jobError;
+  if (!["complete", "partial", "failed"].includes(job.status) || !job.finished_at || !run.generated_at) {
+    throw new Error("El reporte aún no terminó su resincronización y regeneración previa al envío");
+  }
+  if (new Date(run.generated_at).getTime() < new Date(job.finished_at).getTime()) {
+    throw new Error("El contenido del correo es anterior a la última resincronización");
   }
 }
 

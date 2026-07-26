@@ -32,7 +32,8 @@ const reportColumns = [
   ["name", "Nombre"], ["department", "Departamento"], ["schedule", "Grupo / horario"],
   ["actual_check_in", "Entrada real"], ["actual_check_out", "Salida real"],
   ["attendance_log", "Grabación de asistencia"], ["break_duration", "Duración de pausa"],
-  ["break_records", "Registros de descansos"], ["status", "Estado / observación"],
+  ["break_records", "Registros de descansos"], ["worked_period", "Periodo de tiempo"],
+  ["status", "Estado / observación"],
   ["events", "Eventos / detalle"]
 ] as const;
 const statusLabels: Record<string, string> = {
@@ -45,7 +46,8 @@ const ruleFields: CrudField[] = [
   { name: "code", label: "Código", required: true }, { name: "name", label: "Nombre", required: true },
   { name: "applicable_unit_type", label: "Tipo aplicable", type: "select", options: ["store", "administration", "department"], required: true },
   { name: "expected_check_in", label: "Entrada esperada", type: "time", required: true },
-  { name: "expected_check_out", label: "Salida esperada", type: "time", required: true },
+  { name: "expected_check_out", label: "Salida esperada (otros días)", type: "time", required: true },
+  { name: "saturday_expected_check_out", label: "Salida mínima sábado", type: "time", required: true, defaultValue: "13:00", helperText: "El sábado conserva la misma entrada; una salida anterior a esta hora se marca como infracción." },
   { name: "max_break_minutes", label: "Pausa máxima (min)", type: "number", required: true },
   { name: "check_in_tolerance_minutes", label: "Tolerancia entrada (min)", type: "number", defaultValue: 0 },
   { name: "check_out_tolerance_minutes", label: "Tolerancia salida (min)", type: "number", defaultValue: 0 },
@@ -63,7 +65,7 @@ export function AttendanceReportAutomationPage() {
     {tab === 0 && <ContactsSection />}
     {tab === 1 && <ConfigsSection />}
     {tab === 2 && <CrudPage title="Reglas de asistencia" table="attendance_report_rules" orderBy="name" fields={ruleFields}
-      columns={[{ name: "code", label: "Código" }, { name: "name", label: "Nombre" }, { name: "applicable_unit_type", label: "Tipo" }, { name: "expected_check_in", label: "Entrada" }, { name: "expected_check_out", label: "Salida" }, { name: "max_break_minutes", label: "Pausa máxima" }, { name: "is_active", label: "Activa", status: true }]} />}
+      columns={[{ name: "code", label: "Código" }, { name: "name", label: "Nombre" }, { name: "applicable_unit_type", label: "Tipo" }, { name: "expected_check_in", label: "Entrada" }, { name: "expected_check_out", label: "Salida otros días" }, { name: "saturday_expected_check_out", label: "Salida sábado" }, { name: "max_break_minutes", label: "Pausa máxima" }, { name: "is_active", label: "Activa", status: true }]} />}
     {tab === 3 && <RunsSection />}
   </Stack>;
 }
@@ -289,8 +291,10 @@ function RunsSection() {
   }});
   const resend = useMutation({ mutationFn: async (row: any) => {
     const outbox = first(row.email_outbox); if (!outbox?.id) throw new Error("La ejecución no tiene correo generado");
-    if (!confirm("Esto realizará un envío real por Resend. ¿Continuar?")) return;
-    const { data, error } = await supabase.functions.invoke("send-attendance-report-emails", { body: { outbox_id: outbox.id, force: true } });
+    if (!confirm("Esto resincronizará los dispositivos, regenerará el reporte y realizará un nuevo envío real. ¿Continuar?")) return;
+    const { data, error } = await supabase.functions.invoke("generate-attendance-report", {
+      body: { report_date: row.report_date, run_id: row.id, dry_run: false }
+    });
     if (error) throw error; if (data?.error) throw new Error(data.error);
   }, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["attendance_report_runs-v2"] }) });
   const retryRun = useMutation({ mutationFn: async (row: any) => {
@@ -333,7 +337,7 @@ function RunsSection() {
           <Tooltip title="Descargar Excel"><span><IconButton disabled={!row.excel_path} onClick={() => void download(row)}><DownloadIcon /></IconButton></span></Tooltip>
           <Tooltip title="Ver HTML enviado"><span><IconButton disabled={!outbox?.html_body} onClick={() => setHtml(outbox?.html_body ?? null)}><VisibilityIcon /></IconButton></span></Tooltip>
           <Tooltip title="Reintentar generación"><span><IconButton disabled={!["failed", "skipped"].includes(row.status) || retryRun.isPending} onClick={() => retryRun.mutate(row)}><PlayArrowIcon /></IconButton></span></Tooltip>
-          <Tooltip title="Reintentar envío real"><span><IconButton disabled={!outbox?.id || resend.isPending} onClick={() => resend.mutate(row)}><ReplayIcon /></IconButton></span></Tooltip>
+          <Tooltip title="Resincronizar, regenerar y reenviar"><span><IconButton disabled={!outbox?.id || resend.isPending} onClick={() => resend.mutate(row)}><ReplayIcon /></IconButton></span></Tooltip>
         </TableCell></TableRow>;
       })}
     </TableBody></Table></TableContainer>
