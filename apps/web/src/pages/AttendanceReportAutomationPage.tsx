@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControlLabel, IconButton, ListItemText, MenuItem, Paper, Stack, Switch,
   Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, TextField,
   Tooltip, Typography
@@ -132,9 +132,10 @@ function ContactsSection() {
   function start(contact?: any) {
     setEditing(contact ?? null);
     setForm(contact ? {
-      company_id: contact.company_id ?? "", scope_type: contact.scope_type ?? "company",
+      company_id: contact.company_id ?? "", scope_type: contact.role === "regional_supervisor" ? "branches" : contact.scope_type ?? "company",
       branch_ids: contact.attendance_report_contact_branches?.map((link: any) => link.branch_id) ?? (contact.branch_id ? [contact.branch_id] : []),
-      department_id: contact.department_id ?? "", region_id: contact.region_id ?? "", name: contact.name,
+      department_id: contact.role === "regional_supervisor" ? "" : contact.department_id ?? "",
+      region_id: contact.role === "regional_supervisor" ? "" : contact.region_id ?? "", name: contact.name,
       email: contact.email, role: contact.role, is_active: contact.is_active,
       receives_store_reports: contact.receives_store_reports, receives_administration_reports: contact.receives_administration_reports,
       only_on_violation: contact.only_on_violation
@@ -154,9 +155,21 @@ function ContactsSection() {
     </Stack></Paper>)}
     {!contacts.isLoading && !contacts.data?.length && <Alert severity="info">No hay contactos configurados; las ejecuciones sin TO se marcarán como omitidas.</Alert>}
     <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md"><DialogTitle>{editing ? "Editar contacto" : "Agregar contacto"}</DialogTitle><DialogContent><Stack spacing={1.5} sx={{ mt: 1 }}>
-      <TextField select label="Alcance" value={form.scope_type} onChange={e => setForm({ ...form, scope_type: e.target.value, branch_ids: [], department_id: "", region_id: "", company_id: e.target.value === "global" ? "" : form.company_id })}>{scopes.map(scope => <MenuItem key={scope} value={scope}>{scopeLabels[scope]}</MenuItem>)}</TextField>
+      {form.role === "regional_supervisor"
+        ? <Alert severity="info">Selecciona aquí todas las tiendas que cubre este supervisor. Esa lista define su zona Norte, Sur o mixta; no necesitas editar la región de cada sucursal.</Alert>
+        : <TextField select label="Alcance" value={form.scope_type} onChange={e => setForm({ ...form, scope_type: e.target.value, branch_ids: [], department_id: "", region_id: "", company_id: e.target.value === "global" ? "" : form.company_id })}>{scopes.map(scope => <MenuItem key={scope} value={scope}>{scopeLabels[scope]}</MenuItem>)}</TextField>}
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}><TextField fullWidth label="Nombre" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /><TextField fullWidth label="Email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required /></Stack>
-      <TextField select label="Rol" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>{contactRoles.map(role => <MenuItem key={role} value={role}>{roleLabels[role]}</MenuItem>)}</TextField>
+      <TextField select label="Rol" value={form.role} onChange={e => {
+        const role = e.target.value;
+        setForm({
+          ...form,
+          role,
+          ...(role === "regional_supervisor" ? {
+            scope_type: "branches", branch_ids: [], department_id: "", region_id: "",
+            receives_store_reports: true, receives_administration_reports: false
+          } : {})
+        });
+      }}>{contactRoles.map(role => <MenuItem key={role} value={role}>{roleLabels[role]}</MenuItem>)}</TextField>
       <ScopeFields form={form} setForm={setForm} lookups={lookups.data} />
       <Divider />
       <FormControlLabel control={<Switch checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} />} label="Activo" />
@@ -385,11 +398,32 @@ function HtmlDialog({ html, title, onClose }: { html: string | null; title: stri
 
 function ScopeFields({ form, setForm, lookups }: { form: any; setForm: (value: any) => void; lookups: any }) {
   if (form.scope_type === "global") return <Alert severity="info">Aplica a todas las empresas autorizadas. No requiere sucursal ni departamento.</Alert>;
-  const companyBranches = (lookups?.branches ?? []).filter((branch: any) => !form.company_id || branch.company_id === form.company_id);
+  const companyBranches = (lookups?.branches ?? []).filter((branch: any) => form.company_id && branch.company_id === form.company_id);
+  const supervisorStores = companyBranches.filter((branch: any) => branch.unit_type === "store");
+  const supervisorSelection = supervisorStores.filter((branch: any) => form.branch_ids.includes(branch.id));
   return <>
     <TextField select label="Empresa" value={form.company_id} onChange={e => setForm({ ...form, company_id: e.target.value, branch_ids: [], department_id: "" })} required>{lookups?.companies.map((company: any) => <MenuItem key={company.id} value={company.id}>{company.name}</MenuItem>)}</TextField>
+    {form.role === "regional_supervisor" && <Stack spacing={1}>
+      <Autocomplete
+        multiple
+        disableCloseOnSelect
+        disabled={!form.company_id}
+        options={supervisorStores}
+        value={supervisorSelection}
+        onChange={(_, values) => setForm({ ...form, branch_ids: values.map((branch: any) => branch.id) })}
+        getOptionLabel={(branch: any) => branch.name}
+        isOptionEqualToValue={(option: any, value: any) => option.id === value.id}
+        noOptionsText={form.company_id ? "No hay tiendas activas para esta empresa" : "Selecciona primero una empresa"}
+        renderOption={(props, branch: any, state) => <li {...props} key={branch.id}><Checkbox checked={state.selected} sx={{ mr: 1 }} />{branch.name}</li>}
+        renderInput={params => <TextField {...params} label="Tiendas bajo este supervisor" placeholder="Buscar y seleccionar tiendas" required helperText={`${supervisorSelection.length} tienda(s) seleccionada(s). Esta cobertura se usa directamente al resolver los destinatarios.`} />}
+      />
+      <Stack direction="row" spacing={1}>
+        <Button size="small" disabled={!form.company_id || !supervisorStores.length} onClick={() => setForm({ ...form, branch_ids: supervisorStores.map((branch: any) => branch.id) })}>Seleccionar todas</Button>
+        <Button size="small" disabled={!form.branch_ids.length} onClick={() => setForm({ ...form, branch_ids: [] })}>Limpiar</Button>
+      </Stack>
+    </Stack>}
     {form.scope_type === "region" && <TextField select label="Región" value={form.region_id} onChange={e => setForm({ ...form, region_id: e.target.value })} required>{lookups?.regions.map((region: any) => <MenuItem key={region.id} value={region.id}>{region.name}</MenuItem>)}</TextField>}
-    {(form.scope_type === "branch" || form.scope_type === "branches" || form.scope_type === "department") && <TextField select label={form.scope_type === "branch" ? "Sucursal" : form.scope_type === "department" ? "Sucursales (opcional)" : "Sucursales"} value={form.scope_type === "branch" ? (form.branch_ids[0] ?? "") : form.branch_ids} onChange={e => setForm({ ...form, branch_ids: Array.isArray(e.target.value) ? e.target.value : e.target.value ? [e.target.value] : [] })} SelectProps={form.scope_type === "branch" ? undefined : { multiple: true, renderValue: selected => (selected as string[]).map(id => companyBranches.find((branch: any) => branch.id === id)?.name).filter(Boolean).join(", ") }}>
+    {form.role !== "regional_supervisor" && (form.scope_type === "branch" || form.scope_type === "branches" || form.scope_type === "department") && <TextField select label={form.scope_type === "branch" ? "Sucursal" : form.scope_type === "department" ? "Sucursales (opcional)" : "Sucursales"} value={form.scope_type === "branch" ? (form.branch_ids[0] ?? "") : form.branch_ids} onChange={e => setForm({ ...form, branch_ids: Array.isArray(e.target.value) ? e.target.value : e.target.value ? [e.target.value] : [] })} SelectProps={form.scope_type === "branch" ? undefined : { multiple: true, renderValue: selected => (selected as string[]).map(id => companyBranches.find((branch: any) => branch.id === id)?.name).filter(Boolean).join(", ") }}>
       {form.scope_type === "department" && <MenuItem value=""><em>Todas las aplicables al departamento</em></MenuItem>}
       {companyBranches.map((branch: any) => <MenuItem key={branch.id} value={branch.id}>{form.scope_type !== "branch" && <Checkbox checked={form.branch_ids.includes(branch.id)} />}<ListItemText primary={branch.name} /></MenuItem>)}
     </TextField>}

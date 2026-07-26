@@ -147,6 +147,21 @@ test("regional supervisor receives only the selected region", () => {
   assert.ok(!north.cc.includes("south-supervisor@renovagt.com"));
 });
 
+test("regional supervisor can cover an explicit store selection without branch regions", () => {
+  const supervisor: ReportContact = {
+    ...contact("north-supervisor@renovagt.com", "regional_supervisor"),
+    company_id: "renova", scope_type: "branches", branch_ids: ["north-1", "north-2"]
+  };
+  const covered = resolveReportRecipients([supervisor], {
+    ...context("store", false), companyIds: ["renova"], branchIds: ["north-2"], regionIds: []
+  });
+  const outsideCoverage = resolveReportRecipients([supervisor], {
+    ...context("store", false), companyIds: ["renova"], branchIds: ["south-1"], regionIds: []
+  });
+  assert.ok(covered.cc.includes("north-supervisor@renovagt.com"));
+  assert.ok(!outsideCoverage.cc.includes("north-supervisor@renovagt.com"));
+});
+
 test("multi-branch primary contact covers selected branches without leaking broader outputs", () => {
   const multi: ReportContact = {
     ...contact("multi@renovagt.com", "custom_to"),
