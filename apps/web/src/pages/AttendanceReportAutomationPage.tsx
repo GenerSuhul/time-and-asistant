@@ -175,12 +175,13 @@ function ConfigsSection() {
   const [editing, setEditing] = useState<any>(null);
   const [form, setForm] = useState(emptyConfig());
   const [previewConfig, setPreviewConfig] = useState<any>(null);
+  const [removeNotice, setRemoveNotice] = useState("");
   const configs = useQuery({ queryKey: ["attendance_report_configs-v2"], queryFn: async () => {
     const { data, error } = await supabase.from("attendance_report_configs").select(`
       *,companies:company_id(name),branches:branch_id(name),departments:department_id(name),
       attendance_report_regions:region_id(name),attendance_report_rules:rule_id(name),
       attendance_report_config_branches(branch_id)
-    `).order("send_time");
+    `).is("archived_at", null).order("send_time");
     if (error) throw error; return data ?? [];
   }});
   const contacts = useQuery({ queryKey: ["attendance-report-recipient-candidates"], queryFn: async () => {
@@ -223,9 +224,17 @@ function ConfigsSection() {
       if (linked.error) throw linked.error;
     }
   }, onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["attendance_report_configs-v2"] }); setOpen(false); }});
-  const remove = useMutation({ mutationFn: async (id: string) => {
-    const { error } = await supabase.from("attendance_report_configs").delete().eq("id", id); if (error) throw error;
-  }, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["attendance_report_configs-v2"] }) });
+  const remove = useMutation({ mutationFn: async (config: any) => {
+    const { data, error } = await supabase.rpc("remove_attendance_report_config", { p_config_id: config.id });
+    if (error) throw error;
+    return { action: data as "deleted" | "archived", label: scopeDescription(config, lookups.data) };
+  }, onSuccess: async result => {
+    setRemoveNotice(result.action === "archived"
+      ? `${result.label} se desactivó y se quitó de la lista. Sus ejecuciones históricas se conservaron.`
+      : `${result.label} se eliminó correctamente.`);
+    await queryClient.invalidateQueries({ queryKey: ["attendance_report_configs-v2"] });
+    await queryClient.invalidateQueries({ queryKey: ["attendance-report-run-configs"] });
+  }});
   function start(config?: any) {
     setEditing(config ?? null);
     setForm(config ? {
@@ -242,12 +251,16 @@ function ConfigsSection() {
   }
   return <Stack spacing={2}>
     <Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">Configuraciones de reportes</Typography><Typography variant="body2" color="text.secondary">El Excel conserva todas las columnas; la selección aplica al HTML y preview.</Typography></Box><Button variant="contained" startIcon={<AddIcon />} onClick={() => start()}>Nueva configuración</Button></Stack>
+    {removeNotice && <Alert severity="success" onClose={() => setRemoveNotice("")}>{removeNotice}</Alert>}
     {(configs.error || save.error || remove.error) && <Alert severity="error">{errorMessage(configs.error ?? save.error ?? remove.error)}</Alert>}
     <TableContainer component={Paper} variant="outlined"><Table size="small"><TableHead><TableRow><TableCell>Alcance</TableCell><TableCell>Salida</TableCell><TableCell>Hora</TableCell><TableCell>Regla</TableCell><TableCell>Estado</TableCell><TableCell align="right">Acciones</TableCell></TableRow></TableHead><TableBody>
       {(configs.data ?? []).map((config: any) => <TableRow key={config.id}><TableCell>{scopeDescription(config, lookups.data)}</TableCell><TableCell>{config.output_mode === "separate_by_branch" ? "Separado por sucursal" : "Consolidado"}</TableCell><TableCell>{String(config.send_time).slice(0, 5)}</TableCell><TableCell>{relationName(config.attendance_report_rules)}</TableCell><TableCell><Chip size="small" color={config.is_active ? "success" : "default"} label={config.is_active ? "Activo" : "Inactivo"} /></TableCell><TableCell align="right">
         <Tooltip title="Previsualizar plantilla"><IconButton size="small" onClick={() => setPreviewConfig(config)}><PreviewIcon fontSize="small" /></IconButton></Tooltip>
         <IconButton size="small" onClick={() => start(config)}><EditIcon fontSize="small" /></IconButton>
-        <IconButton size="small" color="error" onClick={() => { if (confirm("¿Eliminar esta configuración? Las ejecuciones históricas protegidas impedirán borrados inseguros.")) remove.mutate(config.id); }}><DeleteIcon fontSize="small" /></IconButton>
+        <IconButton size="small" color="error" disabled={remove.isPending} onClick={() => {
+          setRemoveNotice("");
+          if (confirm("¿Quitar esta configuración? Si tiene ejecuciones históricas, se desactivará y ocultará sin borrar esos reportes.")) remove.mutate(config);
+        }}><DeleteIcon fontSize="small" /></IconButton>
       </TableCell></TableRow>)}
     </TableBody></Table></TableContainer>
     <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md"><DialogTitle>{editing ? "Editar configuración" : "Nueva configuración"}</DialogTitle><DialogContent><Stack spacing={1.5} sx={{ mt: 1 }}>
@@ -282,7 +295,7 @@ function RunsSection() {
   const [previewConfig, setPreviewConfig] = useState<any>(null);
   const [html, setHtml] = useState<string | null>(null);
   const configs = useQuery({ queryKey: ["attendance-report-run-configs"], queryFn: async () => {
-    const { data, error } = await supabase.from("attendance_report_configs").select("id,company_id,region_id,scope_type,output_mode,branch_id,department_id,attendance_report_config_branches(branch_id),branches:branch_id(name),departments:department_id(name)").order("created_at");
+    const { data, error } = await supabase.from("attendance_report_configs").select("id,company_id,region_id,scope_type,output_mode,branch_id,department_id,attendance_report_config_branches(branch_id),branches:branch_id(name),departments:department_id(name)").is("archived_at", null).order("created_at");
     if (error) throw error; return data ?? [];
   }});
   const runs = useQuery({ queryKey: ["attendance_report_runs-v2"], queryFn: async () => {
@@ -446,7 +459,14 @@ function first(value: any) { return Array.isArray(value) ? value[0] : value; }
 function lookupName(items: any[] | undefined, id: string) { return items?.find(item => item.id === id)?.name ?? ""; }
 function configLabel(config: any) { return relationName(config.branches) || relationName(config.departments) || scopeLabels[config.scope_type] || "Configuración"; }
 function runLabel(row: any) { return relationName(row.branches) || row.scope_snapshot?.branch_names?.join(", ") || row.output_key || "Consolidado"; }
-function errorMessage(error: any) { return error instanceof Error ? error.message : String(error ?? "Error"); }
+function errorMessage(error: any) {
+  if (!error) return "Ocurrió un error inesperado";
+  if (typeof error === "string") return error;
+  if (typeof error.message === "string" && error.message.trim()) return error.message;
+  if (typeof error.error_description === "string" && error.error_description.trim()) return error.error_description;
+  if (typeof error.details === "string" && error.details.trim()) return error.details;
+  try { return JSON.stringify(error); } catch { return "Ocurrió un error inesperado"; }
+}
 function yesterdayGuatemala() {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Guatemala", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const value = new Date(`${today}T12:00:00Z`); value.setUTCDate(value.getUTCDate() - 1); return value.toISOString().slice(0, 10);
