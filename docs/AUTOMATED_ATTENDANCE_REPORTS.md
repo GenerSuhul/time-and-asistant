@@ -3,7 +3,7 @@
 ## Flujo operativo
 
 1. El scheduler del Device Gateway invoca `schedule-daily-attendance-reports` cada minuto.
-2. La función usa `America/Guatemala`, toma el día anterior y busca configuraciones activas cuya hora ya venció.
+2. La función usa `America/Guatemala` y busca configuraciones activas de lunes a sábado a las 07:30. El lunes reporta el sábado; de martes a sábado reporta el día anterior. El domingo no crea ejecuciones.
 3. Por cada alcance crea un `attendance_sync_jobs` de sistema con `force=true`. Solo deduplica jobs todavía activos; nunca reutiliza un resultado terminal anterior.
 4. El reporte no se genera hasta que el job de DeviceGateway termina (`complete`, `partial` o `failed`).
 5. `generate-attendance-report` recalcula `daily_attendance`, aplica la regla configurable, resuelve destinatarios, genera HTML/Excel y crea `email_outbox`.
@@ -116,13 +116,13 @@ Edge Functions:
 - `ATTENDANCE_REPORT_FROM_EMAIL=reportes@renovagt.com`
 - `ATTENDANCE_REPORT_FROM_NAME=Renova Guatemala`
 - `REPORTS_TIMEZONE=America/Guatemala`
-- `ATTENDANCE_REPORT_SEND_HOUR=06:00`
+- `ATTENDANCE_REPORT_SEND_HOUR=07:30`
 
 Device Gateway:
 
 - `ATTENDANCE_REPORTS_ENABLED=true`
 - `REPORTS_TIMEZONE=America/Guatemala`
-- `ATTENDANCE_REPORT_SEND_HOUR=06:00`
+- `ATTENDANCE_REPORT_SEND_HOUR=07:30`
 - `ATTENDANCE_REPORT_SCHEDULER_INTERVAL_SECONDS=60`
 
 La clave de Resend solo vive en los secretos de Supabase. No se guarda en Postgres, frontend, logs ni repositorio.

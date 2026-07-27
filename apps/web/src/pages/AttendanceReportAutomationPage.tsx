@@ -58,7 +58,7 @@ const ruleFields: CrudField[] = [
 export function AttendanceReportAutomationPage() {
   const [tab, setTab] = useState(0);
   return <Stack spacing={2}>
-    <Box><Typography variant="h4">Reportes automáticos</Typography><Typography color="text.secondary">Configura alcances, destinatarios, plantilla y envíos diarios del día anterior.</Typography></Box>
+    <Box><Typography variant="h4">Reportes automáticos</Typography><Typography color="text.secondary">Configura alcances, destinatarios y plantillas. Los envíos salen de lunes a sábado a las 07:30 (Guatemala).</Typography></Box>
     <Paper variant="outlined"><Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto">
       <Tab label="Contactos" /><Tab label="Configuraciones" /><Tab label="Reglas" /><Tab label="Ejecuciones" />
     </Tabs></Paper>
@@ -215,7 +215,7 @@ function ConfigsSection() {
       branch_id: branchId, department_id: form.scope_type === "department" ? form.department_id : null,
       region_id: form.scope_type === "region" ? form.region_id : null, region: form.scope_type === "region" ? regionName : null,
       unit_type: form.scope_type === "department" ? "department" : unitTypes.length === 1 ? unitTypes[0] : "mixed",
-      output_mode: form.output_mode, send_time: form.send_time, rule_id: form.rule_id,
+      output_mode: form.output_mode, send_time: "07:30", rule_id: form.rule_id,
       include_excel: form.include_excel, include_html: form.include_html,
       copy_hr_manager_only_on_violation: form.copy_hr_manager_only_on_violation,
       warnings_trigger_hr_copy: form.warnings_trigger_hr_copy, copy_commercial_manager: form.copy_commercial_manager,
@@ -254,7 +254,7 @@ function ConfigsSection() {
       company_id: config.company_id ?? "", scope_type: config.scope_type ?? "branch",
       branch_ids: config.attendance_report_config_branches?.map((link: any) => link.branch_id) ?? (config.branch_id ? [config.branch_id] : []),
       department_id: config.department_id ?? "", region_id: config.region_id ?? "", output_mode: config.output_mode ?? "consolidated",
-      send_time: String(config.send_time ?? "06:00").slice(0, 5), rule_id: config.rule_id,
+      send_time: "07:30", rule_id: config.rule_id,
       include_excel: config.include_excel, include_html: config.include_html,
       copy_hr_manager_only_on_violation: config.copy_hr_manager_only_on_violation,
       warnings_trigger_hr_copy: config.warnings_trigger_hr_copy, copy_commercial_manager: config.copy_commercial_manager,
@@ -266,8 +266,8 @@ function ConfigsSection() {
     <Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">Configuraciones de reportes</Typography><Typography variant="body2" color="text.secondary">El Excel conserva todas las columnas; la selección aplica al HTML y preview.</Typography></Box><Button variant="contained" startIcon={<AddIcon />} onClick={() => start()}>Nueva configuración</Button></Stack>
     {removeNotice && <Alert severity="success" onClose={() => setRemoveNotice("")}>{removeNotice}</Alert>}
     {(configs.error || save.error || remove.error) && <Alert severity="error">{errorMessage(configs.error ?? save.error ?? remove.error)}</Alert>}
-    <TableContainer component={Paper} variant="outlined"><Table size="small"><TableHead><TableRow><TableCell>Alcance</TableCell><TableCell>Salida</TableCell><TableCell>Hora</TableCell><TableCell>Regla</TableCell><TableCell>Estado</TableCell><TableCell align="right">Acciones</TableCell></TableRow></TableHead><TableBody>
-      {(configs.data ?? []).map((config: any) => <TableRow key={config.id}><TableCell>{scopeDescription(config, lookups.data)}</TableCell><TableCell>{config.output_mode === "separate_by_branch" ? "Separado por sucursal" : "Consolidado"}</TableCell><TableCell>{String(config.send_time).slice(0, 5)}</TableCell><TableCell>{relationName(config.attendance_report_rules)}</TableCell><TableCell><Chip size="small" color={config.is_active ? "success" : "default"} label={config.is_active ? "Activo" : "Inactivo"} /></TableCell><TableCell align="right">
+    <TableContainer component={Paper} variant="outlined"><Table size="small"><TableHead><TableRow><TableCell>Alcance</TableCell><TableCell>Salida</TableCell><TableCell>Programación</TableCell><TableCell>Regla</TableCell><TableCell>Estado</TableCell><TableCell align="right">Acciones</TableCell></TableRow></TableHead><TableBody>
+      {(configs.data ?? []).map((config: any) => <TableRow key={config.id}><TableCell>{scopeDescription(config, lookups.data)}</TableCell><TableCell>{config.output_mode === "separate_by_branch" ? "Separado por sucursal" : "Consolidado"}</TableCell><TableCell>Lun–Sáb · {String(config.send_time).slice(0, 5)}</TableCell><TableCell>{relationName(config.attendance_report_rules)}</TableCell><TableCell><Chip size="small" color={config.is_active ? "success" : "default"} label={config.is_active ? "Activo" : "Inactivo"} /></TableCell><TableCell align="right">
         <Tooltip title="Previsualizar plantilla"><IconButton size="small" onClick={() => setPreviewConfig(config)}><PreviewIcon fontSize="small" /></IconButton></Tooltip>
         <IconButton size="small" onClick={() => start(config)}><EditIcon fontSize="small" /></IconButton>
         <IconButton size="small" color="error" disabled={remove.isPending} onClick={() => {
@@ -281,7 +281,7 @@ function ConfigsSection() {
       <ScopeFields form={form} setForm={setForm} lookups={lookups.data} />
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
         <TextField fullWidth select label="Tipo de salida" value={form.output_mode} onChange={e => setForm({ ...form, output_mode: e.target.value })}><MenuItem value="consolidated">Consolidado</MenuItem><MenuItem value="separate_by_branch">Separado por sucursal</MenuItem></TextField>
-        <TextField fullWidth type="time" label="Hora automática (Guatemala)" value={form.send_time} onChange={e => setForm({ ...form, send_time: e.target.value })} InputLabelProps={{ shrink: true }} />
+        <TextField fullWidth type="time" label="Hora automática (Guatemala)" value="07:30" disabled helperText="Horario global: lunes a sábado a las 07:30." InputLabelProps={{ shrink: true }} />
       </Stack>
       <TextField select label="Regla de asistencia" value={form.rule_id} onChange={e => setForm({ ...form, rule_id: e.target.value })}>{lookups.data?.rules.filter((rule: any) => !rule.company_id || !form.company_id || rule.company_id === form.company_id).map((rule: any) => <MenuItem key={rule.id} value={rule.id}>{rule.name}</MenuItem>)}</TextField>
       <Alert severity={potentialRecipients.length ? "info" : "warning"}>Destinatarios potenciales según alcance: {potentialRecipients.join(", ") || "ninguno"}. La regla TO/CC final también considera rol e infracciones.</Alert>
@@ -486,7 +486,7 @@ function emptyContact() {
 }
 function defaultColumns() { return Object.fromEntries(reportColumns.map(([key]) => [key, true])) as Record<string, boolean>; }
 function emptyConfig() {
-  return { company_id: "", scope_type: "branch", branch_ids: [] as string[], department_id: "", region_id: "", output_mode: "consolidated", send_time: "06:00", rule_id: "", include_excel: true, include_html: true, copy_hr_manager_only_on_violation: true, warnings_trigger_hr_copy: false, copy_commercial_manager: true, html_columns: defaultColumns(), is_active: false };
+  return { company_id: "", scope_type: "branch", branch_ids: [] as string[], department_id: "", region_id: "", output_mode: "consolidated", send_time: "07:30", rule_id: "", include_excel: true, include_html: true, copy_hr_manager_only_on_violation: true, warnings_trigger_hr_copy: false, copy_commercial_manager: true, html_columns: defaultColumns(), is_active: false };
 }
 function relationName(value: any) { return first(value)?.name ?? ""; }
 function first(value: any) { return Array.isArray(value) ? value[0] : value; }

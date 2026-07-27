@@ -29,7 +29,7 @@ const envSchema = z.object({
   COMMAND_WORKER_INTERVAL_MS: z.coerce.number().int().min(250).max(5000).default(1000),
   ATTENDANCE_REPORTS_ENABLED: z.string().optional().transform((value) => value?.toLowerCase() !== "false"),
   REPORTS_TIMEZONE: z.literal("America/Guatemala").default("America/Guatemala"),
-  ATTENDANCE_REPORT_SEND_HOUR: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("06:00"),
+  ATTENDANCE_REPORT_SEND_HOUR: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("07:30"),
   ATTENDANCE_REPORT_SCHEDULER_INTERVAL_SECONDS: z.coerce.number().int().min(30).default(60)
 });
 

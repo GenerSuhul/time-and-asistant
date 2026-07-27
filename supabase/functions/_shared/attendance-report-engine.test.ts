@@ -10,6 +10,10 @@ import {
   type AttendanceRule,
   type ReportContact
 } from "./attendance-report-engine.ts";
+import {
+  attendanceReportDateForDelivery,
+  isAttendanceReportDeliveryWeekday
+} from "./attendance-report-schedule.ts";
 
 const stores: AttendanceRule = { expected_check_in: "06:50", expected_check_out: "17:00", max_break_minutes: 60 };
 const administration: AttendanceRule = { expected_check_in: "07:00", expected_check_out: "17:00", max_break_minutes: 90 };
@@ -57,6 +61,15 @@ test("Saturday keeps the regular entry and requires check-out at 13:00 or later"
     { ...stores, saturday_expected_check_out: "13:00" },
     "2026-07-24"
   ).expected_check_out, "17:00");
+});
+
+test("reports are delivered Monday through Saturday and Monday reports Saturday", () => {
+  assert.equal(isAttendanceReportDeliveryWeekday(0), false);
+  assert.equal(isAttendanceReportDeliveryWeekday(1), true);
+  assert.equal(isAttendanceReportDeliveryWeekday(6), true);
+  assert.equal(attendanceReportDateForDelivery("2026-07-27", 1), "2026-07-25");
+  assert.equal(attendanceReportDateForDelivery("2026-07-28", 2), "2026-07-27");
+  assert.equal(attendanceReportDateForDelivery("2026-08-01", 6), "2026-07-31");
 });
 
 test("missing marks are warnings, never violations", () => {

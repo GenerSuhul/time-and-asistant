@@ -6,6 +6,7 @@ import {
   resolveConfigOutputs,
   transitionRun
 } from "../_shared/attendance-report-service.ts";
+import { attendanceReportDateForDelivery } from "../_shared/attendance-report-schedule.ts";
 
 const terminalSyncStatuses = ["complete", "partial", "failed"];
 
@@ -17,7 +18,7 @@ Deno.serve(async (req) => {
     const supabase = serviceClient();
     await requireRole(req, supabase, ["super_admin", "it_admin", "hr_admin"]);
     const clock = guatemalaClock();
-    const targetDate = previousDate(clock.date);
+    const targetDate = attendanceReportDateForDelivery(clock.date, clock.weekday);
     const errors: string[] = [];
     let runsAdvanced = 0;
     let runsCreated = 0;
@@ -47,7 +48,9 @@ Deno.serve(async (req) => {
 
     const { data: configs, error: configsError } = await supabase.from("attendance_report_configs")
       .select("*,attendance_report_config_branches(branch_id)")
-      .eq("is_active", true).lte("send_time", `${clock.time}:59`);
+      .eq("is_active", true)
+      .contains("delivery_weekdays", [clock.weekday])
+      .lte("send_time", `${clock.time}:59`);
     if (configsError) throw configsError;
     const syncByScope = new Map<string, any>();
     for (const config of configs ?? []) {
@@ -135,7 +138,7 @@ Deno.serve(async (req) => {
         errors, finished_at: new Date().toISOString()
       });
     }
-    return jsonResponse({ target_date: targetDate, local_time: clock.time, configs_due: configs?.length ?? 0, runs_created: runsCreated, runs_advanced: runsAdvanced, errors });
+    return jsonResponse({ target_date: targetDate, local_time: clock.time, local_weekday: clock.weekday, configs_due: configs?.length ?? 0, runs_created: runsCreated, runs_advanced: runsAdvanced, errors });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return jsonResponse({ error: message }, /Unauthorized/i.test(message) ? 401 : /Forbidden/i.test(message) ? 403 : 400);
@@ -156,13 +159,12 @@ function guatemalaClock() {
     hour: "2-digit", minute: "2-digit", hourCycle: "h23"
   }).formatToParts(new Date());
   const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
-  return { date: `${part("year")}-${part("month")}-${part("day")}`, time: `${part("hour")}:${part("minute")}` };
-}
-
-function previousDate(date: string) {
-  const value = new Date(`${date}T12:00:00Z`);
-  value.setUTCDate(value.getUTCDate() - 1);
-  return value.toISOString().slice(0, 10);
+  const date = `${part("year")}-${part("month")}-${part("day")}`;
+  return {
+    date,
+    time: `${part("hour")}:${part("minute")}`,
+    weekday: new Date(`${date}T12:00:00Z`).getUTCDay()
+  };
 }
 
 function sanitizeError(error: unknown) {
