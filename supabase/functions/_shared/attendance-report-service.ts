@@ -381,12 +381,14 @@ async function ensureRun(
 ) {
   if (run) return run;
   const { data: existing, error: existingError } = await supabase.from("attendance_report_runs")
-    .select("*").eq("config_id", config.id).eq("report_date", reportDate).eq("output_key", output.outputKey).maybeSingle();
+    .select("*").eq("config_id", config.id).eq("report_date", reportDate)
+    .eq("output_key", output.outputKey).is("delivery_slot_date", null).maybeSingle();
   if (existingError) throw existingError;
   if (existing) return existing;
   const { data, error } = await supabase.from("attendance_report_runs").insert({
     config_id: config.id,
     report_date: reportDate,
+    run_source: "manual",
     company_id: output.companyIds.length === 1 ? output.companyIds[0] : null,
     branch_id: output.primaryBranchId,
     branch_ids: output.branchIds,

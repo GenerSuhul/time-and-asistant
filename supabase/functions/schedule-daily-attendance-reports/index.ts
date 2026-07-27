@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
           let createdRunId: string | null = null;
           try {
             const { data: existing, error: existingError } = await supabase.from("attendance_report_runs")
-              .select("id").eq("config_id", config.id).eq("report_date", targetDate)
+              .select("id").eq("config_id", config.id).eq("delivery_slot_date", clock.date)
               .eq("output_key", output.outputKey).maybeSingle();
             if (existingError) throw existingError;
             if (existing) continue;
@@ -69,6 +69,8 @@ Deno.serve(async (req) => {
             const { data: run, error: runError } = await supabase.from("attendance_report_runs").insert({
               config_id: config.id,
               report_date: targetDate,
+              delivery_slot_date: clock.date,
+              run_source: "scheduled",
               company_id: output.companyIds.length === 1 ? output.companyIds[0] : null,
               branch_id: output.primaryBranchId,
               branch_ids: output.branchIds,
