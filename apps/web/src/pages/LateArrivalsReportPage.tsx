@@ -208,6 +208,14 @@ function minutes(value: number) {
   return remainder ? `${hours} h ${remainder} min` : `${hours} h`;
 }
 
+function averageMinutes(value: number) {
+  const numeric = Number(value) || 0;
+  const formatted = new Intl.NumberFormat("es-GT", { maximumFractionDigits: 1 }).format(
+    numeric < 60 ? numeric : numeric / 60
+  );
+  return `${formatted} ${numeric < 60 ? "min" : "h"}`;
+}
+
 function dateLabel(value: string, options?: Intl.DateTimeFormatOptions) {
   return new Intl.DateTimeFormat("es-GT", options ?? {
     weekday: "short",
@@ -527,14 +535,14 @@ export function LateArrivalsReportPage() {
   const employeeRows = (data?.employee_ranking ?? []).map((item) => ({
     id: item.employee_id,
     name: item.employee_name,
-    helper: `${item.branch_name} · prom. ${minutes(item.average_minutes)}`,
+    helper: `${item.branch_name} · prom. ${averageMinutes(item.average_minutes)}`,
     count: item.late_arrivals,
     minutes: item.total_minutes
   }));
   const branchRows = (data?.branch_ranking ?? []).map((item) => ({
     id: item.branch_id,
     name: item.branch_name,
-    helper: `${item.employees} ${item.employees === 1 ? "colaborador" : "colaboradores"} · prom. ${minutes(item.average_minutes)}`,
+    helper: `${item.employees} ${item.employees === 1 ? "colaborador" : "colaboradores"} · prom. ${averageMinutes(item.average_minutes)}`,
     count: item.late_arrivals,
     minutes: item.total_minutes
   }));
@@ -545,7 +553,7 @@ export function LateArrivalsReportPage() {
         <Box>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="h4">Histórico de tardanzas</Typography>
-            <Chip size="small" color="warning" variant="outlined" label="Tolerancia aplicada" />
+            <Chip size="small" color="warning" variant="outlined" label="Desde el primer minuto" />
           </Stack>
           <Typography color="text.secondary" sx={{ mt: 0.6 }}>
             Analiza recurrencia, minutos acumulados y concentración por colaborador o tienda.
@@ -652,7 +660,7 @@ export function LateArrivalsReportPage() {
               value={draft.minLateMinutes}
               onChange={(event) => setDraft((current) => ({ ...current, minLateMinutes: Math.max(1, Number(event.target.value) || 1) }))}
               inputProps={{ min: 1, max: 1440 }}
-              helperText="Minutos netos"
+              helperText="Desde la hora programada"
             />
           </Grid2>
           <Grid2 size={{ xs: 12, sm: 6, lg: 2 }}>
@@ -663,7 +671,7 @@ export function LateArrivalsReportPage() {
           <Grid2 size={{ xs: 12, lg: 8 }}>
             <Stack direction="row" alignItems="center" sx={{ height: "100%" }}>
               <Typography variant="caption" color="text.secondary">
-                Se cuentan entradas cuyo retraso supera la tolerancia del horario asignado. Período máximo: 5 años.
+                Toda entrada posterior a la hora programada cuenta como tardanza; no se descuentan minutos de tolerancia. Período máximo: 5 años.
               </Typography>
             </Stack>
           </Grid2>
@@ -691,7 +699,7 @@ export function LateArrivalsReportPage() {
               <MetricCard icon={<StorefrontOutlinedIcon />} label="Tiendas afectadas" value={number(summary.affected_branches)} helper="Sucursales con incidencias" color="#8b5cf6" />
             </Grid2>
             <Grid2 size={{ xs: 12, sm: 6, lg: 3 }}>
-              <MetricCard icon={<TimerOutlinedIcon />} label="Promedio" value={minutes(summary.average_late_minutes)} helper={`${minutes(summary.total_late_minutes)} acumulados`} color="#ef4444" />
+              <MetricCard icon={<TimerOutlinedIcon />} label="Promedio" value={averageMinutes(summary.average_late_minutes)} helper={`${minutes(summary.total_late_minutes)} acumulados`} color="#ef4444" />
             </Grid2>
           </>
         )}
