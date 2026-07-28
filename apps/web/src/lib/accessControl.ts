@@ -12,6 +12,7 @@ export type AppPermission =
   | "live_events"
   | "daily_report"
   | "range_report"
+  | "late_arrivals_report"
   | "attendance_report_automation"
   | "manual_adjustments"
   | "audit"

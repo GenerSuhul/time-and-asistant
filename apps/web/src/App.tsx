@@ -20,6 +20,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { DeviceCommandsPage } from "./pages/DeviceCommandsPage";
 import { LiveEventsPage } from "./pages/LiveEventsPage";
 import { LoginPage } from "./pages/LoginPage";
+import { LateArrivalsReportPage } from "./pages/LateArrivalsReportPage";
 import { ManualAdjustmentsPage } from "./pages/ManualAdjustmentsPage";
 import { RangeReportPage } from "./pages/RangeReportPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -61,6 +62,7 @@ export function App() {
       <Route path="/live-events" element={<Protected permission="live_events"><LiveEventsPage /></Protected>} />
       <Route path="/daily-report" element={<Protected permission="daily_report"><DailyReportPage /></Protected>} />
       <Route path="/range-report" element={<Protected permission="range_report"><RangeReportPage /></Protected>} />
+      <Route path="/late-arrivals-report" element={<Protected permission="late_arrivals_report"><LateArrivalsReportPage /></Protected>} />
       <Route path="/manual-adjustments" element={<Protected permission="manual_adjustments"><ManualAdjustmentsPage /></Protected>} />
       <Route path="/audit" element={<Protected permission="audit"><AuditPage /></Protected>} />
       <Route path="/users" element={<Protected permission="users"><UsersPage /></Protected>} />

@@ -37,6 +37,7 @@ import LogoutIcon from "@mui/icons-material/Logout";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
+import AccessTimeFilledIcon from "@mui/icons-material/AccessTimeFilled";
 import { NavLink, useNavigate } from "react-router-dom";
 import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
 import { useSession } from "../hooks/useSession";
@@ -67,6 +68,7 @@ const navSections = [
     { label: "Usuarios y roles", to: "/users", permission: "users" as AppPermission, icon: <ManageAccountsIcon /> },
     { label: "Reporte diario", to: "/daily-report", permission: "daily_report" as AppPermission, icon: <FactCheckIcon /> },
     { label: "Reporte rango", to: "/range-report", permission: "range_report" as AppPermission, icon: <FactCheckIcon /> },
+    { label: "Histórico tardanzas", to: "/late-arrivals-report", permission: "late_arrivals_report" as AppPermission, icon: <AccessTimeFilledIcon /> },
     { label: "Reportes automáticos", to: "/attendance-report-automation", permission: "attendance_report_automation" as AppPermission, icon: <EventIcon /> },
     { label: "Ajustes manuales", to: "/manual-adjustments", permission: "manual_adjustments" as AppPermission, icon: <TuneIcon /> },
     { label: "Auditoria", to: "/audit", permission: "audit" as AppPermission, icon: <HistoryIcon /> },
