@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
+import { useSession } from "./useSession";
 
 export type CurrentUserProfile = {
   user: {
@@ -35,8 +36,10 @@ export function displayName(data?: CurrentUserProfile) {
 }
 
 export function useCurrentUserProfile() {
+  const { session } = useSession();
   return useQuery({
-    queryKey: ["current-user-profile"],
+    queryKey: ["current-user-profile", session?.user.id],
+    enabled: Boolean(session?.user.id),
     queryFn: async (): Promise<CurrentUserProfile> => {
       const { data: userData, error: userError } = await supabase.auth.getUser();
       if (userError) throw userError;

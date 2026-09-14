@@ -1,4 +1,4 @@
-import { CircularProgress, Box } from "@mui/material";
+import { Alert, CircularProgress, Box } from "@mui/material";
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
@@ -26,11 +26,13 @@ import { RangeReportPage } from "./pages/RangeReportPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { AttendanceReportAutomationPage } from "./pages/AttendanceReportAutomationPage";
+import { LatenessHistoryPage } from "./pages/LatenessHistoryPage";
 
 function Protected({ children, permission }: { children: ReactNode; permission: AppPermission }) {
   const { session, loading } = useSession();
   const currentUser = useCurrentUserProfile();
-  if (loading || (session && currentUser.isLoading)) {
+  if (session && currentUser.error) return <Alert severity="error">No se pudieron comprobar tus permisos. Vuelve a iniciar sesión.</Alert>;
+  if (loading || (session && !currentUser.data)) {
     return (
       <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
         <CircularProgress />
@@ -50,6 +52,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/lateness-history" element={<Protected permission="lateness_history"><LatenessHistoryPage /></Protected>} />
       <Route path="/" element={<Protected permission="dashboard"><DashboardPage /></Protected>} />
       <Route path="/companies" element={<Protected permission="companies"><CompaniesPage /></Protected>} />
       <Route path="/branches" element={<Protected permission="branches"><BranchesPage /></Protected>} />

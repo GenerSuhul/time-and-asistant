@@ -1,4 +1,5 @@
 export type AppPermission =
+  | "lateness_history"
   | "dashboard"
   | "companies"
   | "branches"
@@ -34,11 +35,17 @@ const itOnlyPermissions = new Set<AppPermission>([
 
 export function canAccess(roleKeys: string[], permission: AppPermission) {
   if (roleKeys.some((role) => itRoles.has(role))) return true;
+  if (isRegionalLatenessViewer(roleKeys)) return ["dashboard", "settings", "lateness_history"].includes(permission);
   if (!roleKeys.some((role) => hrRoles.has(role))) return false;
   return !itOnlyPermissions.has(permission);
 }
 
+export function isRegionalLatenessViewer(roleKeys: string[]) {
+  return roleKeys.includes("regional_lateness_viewer") && !roleKeys.some((role) => ["super_admin", "it_admin", "hr_admin"].includes(role));
+}
+
 export function operationalRoleLabel(roleKey: string) {
+  if (roleKey === "regional_lateness_viewer") return "Supervisor regional de tardanzas";
   if (itRoles.has(roleKey)) return "IT";
   if (hrRoles.has(roleKey)) return "RRHH";
   return "Sin acceso operativo";

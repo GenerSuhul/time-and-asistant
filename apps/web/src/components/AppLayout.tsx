@@ -41,7 +41,7 @@ import AccessTimeFilledIcon from "@mui/icons-material/AccessTimeFilled";
 import { NavLink, useNavigate } from "react-router-dom";
 import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
 import { useSession } from "../hooks/useSession";
-import { canAccess, type AppPermission } from "../lib/accessControl";
+import { canAccess, isRegionalLatenessViewer, type AppPermission } from "../lib/accessControl";
 import { supabase } from "../lib/supabase";
 
 const desktopDrawerWidth = 96;
@@ -52,6 +52,7 @@ const sidebarPreferenceKey = "attendance.sidebar.expanded";
 const navSections = [
   [
     { label: "Dashboard", to: "/", permission: "dashboard" as AppPermission, icon: <DashboardIcon /> },
+    { label: "Histórico de tardanzas", to: "/lateness-history", permission: "lateness_history" as AppPermission, icon: <AccessTimeFilledIcon /> },
     { label: "Empresas", to: "/companies", permission: "companies" as AppPermission, icon: <ApartmentIcon /> },
     { label: "Sucursales", to: "/branches", permission: "branches" as AppPermission, icon: <ApartmentIcon /> },
     { label: "Departamentos", to: "/departments", permission: "departments" as AppPermission, icon: <GroupsIcon /> },
@@ -106,7 +107,7 @@ export function AppLayout({ children }: PropsWithChildren) {
     event.preventDefault();
     const text = search.trim();
     if (!text) return;
-    navigate(`/employees?search=${encodeURIComponent(text)}`);
+    navigate(`${isRegionalLatenessViewer(roleKeys) ? "/lateness-history" : "/employees"}?search=${encodeURIComponent(text)}`);
   }
 
   function openSidebarFromItem() {

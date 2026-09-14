@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { displayName, useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
 import { supabase } from "../lib/supabase";
+import { isRegionalLatenessViewer } from "../lib/accessControl";
 
 type ProfileForm = {
   full_name: string;
@@ -46,13 +47,14 @@ export function SettingsPage() {
       const { error: authError } = await supabase.auth.updateUser(authPayload);
       if (authError) throw authError;
 
-      const { error: profileError } = await supabase.from("profiles").upsert({
+      const limited = isRegionalLatenessViewer(currentUser.data.roles.map((role) => role.key));
+      const { error: profileError } = await (limited ? supabase.from("profiles").update({ email: cleanEmail, full_name: cleanName }).eq("id", currentUser.data.user.id) : supabase.from("profiles").upsert({
         id: currentUser.data.user.id,
         email: cleanEmail,
         full_name: cleanName,
         status: currentUser.data.profile?.status ?? "active",
         company_id: currentUser.data.profile?.company_id ?? null
-      });
+      }));
       if (profileError) throw profileError;
     },
     onSuccess: async () => {

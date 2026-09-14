@@ -68,6 +68,8 @@ type UserRow = Profile & {
 };
 
 type UserForm = {
+  region_ids: string[];
+  branch_ids: string[];
   id: string;
   email: string;
   password: string;
@@ -79,6 +81,8 @@ type UserForm = {
 };
 
 const emptyForm: UserForm = {
+  region_ids: [],
+  branch_ids: [],
   id: "",
   email: "",
   password: "",
@@ -117,7 +121,7 @@ export function UsersPage() {
     queryFn: async () => {
       const [profilesResult, rolesResult, companiesResult, assignmentsResult] = await Promise.all([
         supabase.from("profiles").select("id,email,full_name,status,company_id,companies:company_id(id,name)").order("created_at", { ascending: false }),
-        supabase.from("roles").select("id,key,name,description").in("key", ["it_admin", "hr_admin"]).order("name", { ascending: true }),
+        supabase.from("roles").select("id,key,name,description").in("key", ["it_admin", "hr_admin", "regional_lateness_viewer"]).order("name", { ascending: true }),
         supabase.from("companies").select("id,name").order("name", { ascending: true }),
         supabase.from("user_roles").select("id,user_id,company_id,roles:role_id(id,key,name,description),companies:company_id(id,name)").order("created_at", { ascending: true })
       ]);
@@ -144,9 +148,23 @@ export function UsersPage() {
   });
   const selectedRole = query.data?.roles.find((role) => form.role_ids.includes(role.id));
   const itRoleSelected = selectedRole?.key === "it_admin";
+  const regionalSelected = selectedRole?.key === "regional_lateness_viewer";
+  const scopeOptions = useQuery({
+    queryKey: ["admin-lateness-options"],
+    queryFn: async () => {
+      const [regions, branches, scopes] = await Promise.all([
+        supabase.from("regions").select("id,name,company_id,source_region_id").eq("is_active", true).order("name"),
+        supabase.from("branches").select("id,name,company_id,region_id").eq("is_active", true).order("name"),
+        supabase.from("user_lateness_scopes").select("user_id,company_id,region_id,branch_id").eq("is_active", true)
+      ]);
+      for (const result of [regions, branches, scopes]) if (result.error) throw result.error;
+      return { regions: regions.data ?? [], branches: branches.data ?? [], scopes: scopes.data ?? [] };
+    }
+  });
 
   const save = useMutation({
     mutationFn: async () => {
+      if (regionalSelected && (!form.role_company_id || !form.region_ids.length && !form.branch_ids.length)) throw new Error("Selecciona empresa y al menos una región o sucursal.");
       const body: Record<string, unknown> = {
         action: editing ? "update_user" : "create_user",
         email: form.email.trim(),
@@ -161,12 +179,17 @@ export function UsersPage() {
       } else {
         body.password = form.password;
       }
+      if (regionalSelected) {
+        body.company_id = form.role_company_id;
+        body.region_ids = form.region_ids;
+        body.branch_ids = form.branch_ids;
+      }
 
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("Sesion expirada. Vuelve a iniciar sesion.");
 
-      const response = await fetch(`${supabaseFunctionUrl}/admin-users`, {
+      const response = await fetch(`${supabaseFunctionUrl}/${regionalSelected ? "admin-lateness-users" : "admin-users"}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -182,6 +205,7 @@ export function UsersPage() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["users-admin"] });
+      await queryClient.invalidateQueries({ queryKey: ["admin-lateness-options"] });
       await queryClient.invalidateQueries({ queryKey: ["current-user-profile"] });
       setOpen(false);
     }
@@ -232,6 +256,8 @@ export function UsersPage() {
     const firstRole = normalizeRole(firstAssignment?.roles ?? null);
     setEditing(user);
     setForm({
+      region_ids: (scopeOptions.data?.scopes ?? []).filter((s) => s.user_id === user.id && s.region_id).map((s) => s.region_id!),
+      branch_ids: (scopeOptions.data?.scopes ?? []).filter((s) => s.user_id === user.id && s.branch_id).map((s) => s.branch_id!),
       id: user.id,
       email: user.email ?? "",
       password: "",
@@ -268,6 +294,7 @@ export function UsersPage() {
 
       {query.isLoading && <LinearProgress />}
       {query.error && <Alert severity="error">{query.error.message}</Alert>}
+      {scopeOptions.error && <Alert severity="error">{scopeOptions.error.message}</Alert>}
       {save.error && <Alert severity="error">{save.error.message}</Alert>}
       {saveRole.error && <Alert severity="error">{saveRole.error.message}</Alert>}
 
@@ -380,7 +407,7 @@ export function UsersPage() {
                   required
                   fullWidth
                   value={form.password}
-                  helperText="Minimo 8 caracteres. El usuario puede cambiarla luego."
+                  helperText={regionalSelected ? "Mínimo 12 caracteres. El supervisor puede cambiarla en Mi perfil." : "Mínimo 8 caracteres. El usuario puede cambiarla luego."}
                   onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
                 />
               </Grid2>
@@ -419,15 +446,24 @@ export function UsersPage() {
                 fullWidth
                 value={itRoleSelected ? "" : form.role_company_id}
                 disabled={itRoleSelected}
-                helperText={itRoleSelected ? "IT siempre tiene alcance global." : "RRHH puede ser global o limitarse a una empresa."}
-                onChange={(event) => setForm((current) => ({ ...current, role_company_id: event.target.value }))}
+                helperText={itRoleSelected ? "IT siempre tiene alcance global." : regionalSelected ? "Selecciona la empresa del supervisor." : "RRHH puede ser global o limitarse a una empresa."}
+                onChange={(event) => setForm((current) => ({ ...current, role_company_id: event.target.value, region_ids: [], branch_ids: [] }))}
               >
-                <MenuItem value="">Global</MenuItem>
+                <MenuItem value="">{regionalSelected ? "Selecciona empresa" : "Global"}</MenuItem>
                 {(query.data?.companies ?? []).map((company) => (
                   <MenuItem key={company.id} value={company.id}>{company.name}</MenuItem>
                 ))}
               </TextField>
             </Grid2>
+            {regionalSelected && <Grid2 size={{ xs: 12 }}><Stack spacing={2}>
+              <TextField select label="Regiones" value={form.region_ids} disabled={!form.role_company_id || scopeOptions.isLoading} SelectProps={{ multiple: true }} onChange={(e) => setForm((current) => ({ ...current, region_ids: typeof e.target.value === "string" ? e.target.value.split(",") : e.target.value }))}>
+                {(scopeOptions.data?.regions ?? []).filter((r) => r.company_id === form.role_company_id).map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
+              </TextField>
+              <TextField select label="Sucursales específicas (opcional)" value={form.branch_ids} disabled={!form.role_company_id || scopeOptions.isLoading} SelectProps={{ multiple: true }} onChange={(e) => setForm((current) => ({ ...current, branch_ids: typeof e.target.value === "string" ? e.target.value.split(",") : e.target.value }))}>
+                {(scopeOptions.data?.branches ?? []).filter((b) => b.company_id === form.role_company_id).map((b) => <MenuItem key={b.id} value={b.id}>{b.name}</MenuItem>)}
+              </TextField>
+              <Alert severity="info">El acceso reúne las tiendas de las regiones seleccionadas y las sucursales específicas. Una región sin tiendas vinculadas no concede acceso.</Alert>
+            </Stack></Grid2>}
             <Grid2 size={{ xs: 12 }}>
               <Stack spacing={1}>
                 <Stack direction="row" alignItems="center" justifyContent="space-between">
