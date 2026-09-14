@@ -34,8 +34,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link as RouterLink } from "react-router-dom";
 import { StatusChip } from "../components/StatusChip";
 import { useCurrentUserProfile } from "../hooks/useCurrentUserProfile";
-import { canAccess, isRegionalLatenessViewer, type AppPermission } from "../lib/accessControl";
-import { RegionalLatenessDashboard } from "./RegionalLatenessDashboard";
+import { canAccess, type AppPermission } from "../lib/accessControl";
 import { supabase } from "../lib/supabase";
 
 type RecentEvent = {
@@ -334,9 +333,6 @@ function EmptyState({ title, body, to, action }: { title: string; body: string; 
 }
 
 export function DashboardPage() {
-  const currentUser = useCurrentUserProfile();
-  const roles = (currentUser.data?.roles ?? []).map((role) => role.key);
-  if (isRegionalLatenessViewer(roles)) return <RegionalLatenessDashboard />;
   return <AdministrativeDashboard />;
 }
 
