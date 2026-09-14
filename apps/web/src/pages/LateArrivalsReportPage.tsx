@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Box,
@@ -32,6 +32,7 @@ import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
 import TimerOutlinedIcon from "@mui/icons-material/TimerOutlined";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 type ReportFilters = {
@@ -398,7 +399,20 @@ function csvCell(value: string | number | null) {
   return `"${text.replaceAll("\"", "\"\"")}"`;
 }
 
-export function LateArrivalsReportPage() {
+type LateArrivalsReportPageProps = {
+  title?: string;
+  subtitle?: string;
+  showExport?: boolean;
+};
+
+export function LateArrivalsReportPage({
+  title = "Histórico de tardanzas",
+  subtitle = "Analiza recurrencia, minutos acumulados y concentración por colaborador o tienda.",
+  showExport = true
+}: LateArrivalsReportPageProps) {
+  const [searchParams] = useSearchParams();
+  const requestedEmployeeSearch = (searchParams.get("search") ?? "").trim().toLowerCase();
+  const appliedSearchRef = useRef("");
   const defaults = useMemo(initialFilters, []);
   const [draft, setDraft] = useState<ReportFilters>(defaults);
   const [applied, setApplied] = useState<ReportFilters>(defaults);
@@ -438,6 +452,32 @@ export function LateArrivalsReportPage() {
   );
   const data = reportQuery.data;
   const summary = data?.summary ?? emptySummary;
+
+  useEffect(() => {
+    if (!requestedEmployeeSearch || appliedSearchRef.current === requestedEmployeeSearch || !lookups.employees.length) return;
+    const match = lookups.employees.find((item) => {
+      const name = item.full_name?.toLowerCase() ?? "";
+      const code = item.employee_code?.toLowerCase() ?? "";
+      return name.includes(requestedEmployeeSearch) || code.includes(requestedEmployeeSearch);
+    });
+    appliedSearchRef.current = requestedEmployeeSearch;
+    if (!match) {
+      setFormError("No encontramos un colaborador con esa búsqueda dentro de tu alcance.");
+      return;
+    }
+    const next = {
+      ...draft,
+      companyId: match.company_id ?? "",
+      branchId: match.branch_id ?? "",
+      departmentId: match.department_id ?? "",
+      employeeId: match.id
+    };
+    setDraft(next);
+    setApplied(next);
+    setPage(0);
+    setRequestVersion((value) => value + 1);
+    setFormError(null);
+  }, [requestedEmployeeSearch, lookups.employees]);
 
   function applyFilters(next = draft) {
     if (!next.startDate || !next.endDate) {
@@ -552,21 +592,23 @@ export function LateArrivalsReportPage() {
       <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ xs: "flex-start", md: "center" }} spacing={1.5}>
         <Box>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Typography variant="h4">Histórico de tardanzas</Typography>
+            <Typography variant="h4">{title}</Typography>
             <Chip size="small" color="warning" variant="outlined" label="Desde el primer minuto" />
           </Stack>
           <Typography color="text.secondary" sx={{ mt: 0.6 }}>
-            Analiza recurrencia, minutos acumulados y concentración por colaborador o tienda.
+            {subtitle}
           </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          startIcon={<FileDownloadOutlinedIcon />}
-          disabled={exporting || !data?.meta.total_rows}
-          onClick={exportCsv}
-        >
-          {exporting ? "Preparando archivo..." : "Exportar CSV"}
-        </Button>
+        {showExport && (
+          <Button
+            variant="outlined"
+            startIcon={<FileDownloadOutlinedIcon />}
+            disabled={exporting || !data?.meta.total_rows}
+            onClick={exportCsv}
+          >
+            {exporting ? "Preparando archivo..." : "Exportar CSV"}
+          </Button>
+        )}
       </Stack>
 
       <Paper variant="outlined" sx={{ p: { xs: 1.75, md: 2.25 }, boxShadow: "none" }}>

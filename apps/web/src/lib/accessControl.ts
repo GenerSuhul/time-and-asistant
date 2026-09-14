@@ -34,6 +34,7 @@ const itOnlyPermissions = new Set<AppPermission>([
 ]);
 
 export function canAccess(roleKeys: string[], permission: AppPermission) {
+  if (permission === "lateness_history") return isRegionalLatenessViewer(roleKeys);
   if (roleKeys.some((role) => itRoles.has(role))) return true;
   if (isRegionalLatenessViewer(roleKeys)) return ["dashboard", "settings", "lateness_history"].includes(permission);
   if (!roleKeys.some((role) => hrRoles.has(role))) return false;
