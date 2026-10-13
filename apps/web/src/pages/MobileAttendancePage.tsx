@@ -12,6 +12,7 @@ import { invokeEdge } from "../lib/edgeFunction";
 import { supabase } from "../lib/supabase";
 
 const MOBILE_ADMIN_EMAIL = "it.agrisystem@gmail.com";
+const AUTHORIZED_EMPLOYEE_NAME = "Gener Alexander Suhul Amador";
 
 type MobileMark = {
   mark_id: string;
@@ -20,8 +21,6 @@ type MobileMark = {
   occurred_at: string;
   attendance_date: string;
   duplicated: boolean;
-  source: "mobile_web";
-  physical_hikvision_event: false;
 };
 
 export function MobileAttendancePage() {
@@ -47,7 +46,7 @@ export function MobileAttendancePage() {
       <Box sx={{ minHeight: "100dvh", display: "grid", placeItems: "center", p: 2, bgcolor: "#f7f8fc" }}>
         <Paper sx={{ width: "min(420px, 100%)", p: 3, textAlign: "center" }}>
           <Typography variant="h6" gutterBottom>Acceso restringido</Typography>
-          <Typography variant="body2" color="text.secondary">Esta página de marcación móvil está disponible únicamente para el administrador autorizado.</Typography>
+          <Typography variant="body2" color="text.secondary">Esta página está disponible únicamente para el usuario autorizado.</Typography>
           <Button sx={{ mt: 2 }} variant="outlined" onClick={() => navigate("/login", { replace: true })}>Iniciar sesión</Button>
         </Paper>
       </Box>
@@ -74,7 +73,7 @@ export function MobileAttendancePage() {
           <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
             <Box>
               <Typography variant="overline" color="primary.main" fontWeight={800}>RENOVAGT ACCESS</Typography>
-              <Typography variant="h5" fontWeight={800}>Marcación móvil</Typography>
+              <Typography variant="h5" fontWeight={800}>Marcación</Typography>
             </Box>
             <Box sx={{ width: 44, height: 44, borderRadius: 2, display: "grid", placeItems: "center", bgcolor: "primary.main", color: "primary.contrastText" }}>
               <AccessTimeRoundedIcon />
@@ -82,8 +81,8 @@ export function MobileAttendancePage() {
           </Stack>
 
           <Box sx={{ p: 2, borderRadius: 2, bgcolor: "#f7f7ff", border: "1px solid", borderColor: "#e3e4fa" }}>
-            <Typography variant="body2" color="text.secondary">Sesión autorizada</Typography>
-            <Typography variant="body1" fontWeight={700}>{MOBILE_ADMIN_EMAIL}</Typography>
+            <Typography variant="body2" color="text.secondary">Usuario autorizado</Typography>
+            <Typography variant="body1" fontWeight={700}>{AUTHORIZED_EMPLOYEE_NAME}</Typography>
           </Box>
 
           {mark.error && <Alert severity="error">{mark.error.message}</Alert>}
@@ -116,10 +115,6 @@ export function MobileAttendancePage() {
               Marcar salida
             </Button>
           </Stack>
-
-          <Typography variant="caption" color="text.secondary" textAlign="center">
-            La marca queda auditada como marcación móvil. No representa un evento físico de un lector Hikvision.
-          </Typography>
 
           <Button
             size="small"

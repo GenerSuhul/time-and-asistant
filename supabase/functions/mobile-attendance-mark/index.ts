@@ -7,6 +7,7 @@ import { serviceClient } from "../_shared/supabase.ts";
 // This allow-list is intentionally compiled into the function.  A role alone
 // is not sufficient: another IT account cannot use this mobile endpoint.
 const MOBILE_ADMIN_EMAIL = "it.agrisystem@gmail.com";
+const AUTHORIZED_EMPLOYEE_ID = "00f3f4cd-322e-44c6-9d5a-4b8c4c4fa13d";
 
 const input = z.object({
   event_type: z.enum(["check_in", "check_out", "lunch_out", "lunch_in", "break_out", "break_in"]),
@@ -76,7 +77,9 @@ Deno.serve(async (req) => {
       .eq("is_active", true)
       .maybeSingle();
     if (authorizationError) throw authorizationError;
-    if (!authorization?.employee_id) throw new Error("MOBILE_ATTENDANCE_EMPLOYEE_NOT_CONFIGURED");
+    if (!authorization?.employee_id || authorization.employee_id !== AUTHORIZED_EMPLOYEE_ID) {
+      throw new Error("MOBILE_ATTENDANCE_EMPLOYEE_NOT_CONFIGURED");
+    }
 
     const occurredAt = new Date().toISOString();
     const { data: markRows, error: markError } = await supabase.rpc("create_mobile_admin_attendance_mark", {
