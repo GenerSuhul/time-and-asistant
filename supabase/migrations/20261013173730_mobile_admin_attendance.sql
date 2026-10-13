@@ -118,12 +118,12 @@ begin
 
   select e.* into v_employee
   from public.employees e
-  join public.mobile_attendance_authorizations authorization
-    on authorization.employee_id = e.id
+  join public.mobile_attendance_authorizations authz
+    on authz.employee_id = e.id
   where e.id = p_employee_id
     and e.status = 'active'
-    and authorization.is_active = true
-    and authorization.actor_email = lower(p_actor_email);
+    and authz.is_active = true
+    and authz.actor_email = lower(p_actor_email);
 
   if not found then
     raise exception 'MOBILE_ATTENDANCE_EMPLOYEE_NOT_CONFIGURED';
