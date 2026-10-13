@@ -1,6 +1,6 @@
 import { Alert, CircularProgress, Box } from "@mui/material";
 import type { ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppLayout } from "./components/AppLayout";
 import { useCurrentUserProfile } from "./hooks/useCurrentUserProfile";
 import { useSession } from "./hooks/useSession";
@@ -27,6 +27,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { AttendanceReportAutomationPage } from "./pages/AttendanceReportAutomationPage";
 import { LatenessHistoryPage } from "./pages/LatenessHistoryPage";
+import { MobileAttendancePage } from "./pages/MobileAttendancePage";
 
 function Protected({ children, permission }: { children: ReactNode; permission: AppPermission }) {
   const { session, loading } = useSession();
@@ -48,10 +49,21 @@ function Protected({ children, permission }: { children: ReactNode; permission: 
   return <AppLayout>{children}</AppLayout>;
 }
 
+function MobileAttendanceRoute() {
+  const { session, loading } = useSession();
+  const location = useLocation();
+  if (loading) {
+    return <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}><CircularProgress /></Box>;
+  }
+  if (!session) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  return <MobileAttendancePage />;
+}
+
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/mobile-attendance" element={<MobileAttendanceRoute />} />
       <Route path="/lateness-history" element={<Protected permission="lateness_history"><LatenessHistoryPage /></Protected>} />
       <Route path="/" element={<Protected permission="dashboard"><DashboardPage /></Protected>} />
       <Route path="/companies" element={<Protected permission="companies"><CompaniesPage /></Protected>} />

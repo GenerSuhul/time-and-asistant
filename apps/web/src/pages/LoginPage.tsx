@@ -17,12 +17,13 @@ import AccountCircleOutlinedIcon from "@mui/icons-material/AccountCircleOutlined
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import { supabase } from "../lib/supabase";
 
 export function LoginPage() {
   const { session } = useSession();
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -30,7 +31,10 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  if (session) return <Navigate to="/" replace />;
+  const redirectTo = typeof location.state?.from === "string" && location.state.from.startsWith("/")
+    ? location.state.from
+    : "/";
+  if (session) return <Navigate to={redirectTo} replace />;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
