@@ -1,7 +1,9 @@
 import { useState } from "react";
 import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
+import CoffeeRoundedIcon from "@mui/icons-material/CoffeeRounded";
 import ExitToAppRoundedIcon from "@mui/icons-material/ExitToAppRounded";
 import LoginRoundedIcon from "@mui/icons-material/LoginRounded";
+import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import { Alert, Box, Button, CircularProgress, Paper, Stack, Typography } from "@mui/material";
 import { useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -14,10 +16,21 @@ import { supabase } from "../lib/supabase";
 const MOBILE_ADMIN_EMAIL = "it.agrisystem@gmail.com";
 const AUTHORIZED_EMPLOYEE_NAME = "Gener Alexander Suhul Amador";
 
+type AttendanceEventType = "check_in" | "check_out" | "lunch_out" | "lunch_in" | "break_out" | "break_in";
+
+const EVENT_LABELS: Record<AttendanceEventType, string> = {
+  check_in: "Entrada",
+  check_out: "Salida",
+  lunch_out: "Salida a almuerzo",
+  lunch_in: "Entrada de almuerzo",
+  break_out: "Salida a descanso",
+  break_in: "Entrada de descanso"
+};
+
 type MobileMark = {
   mark_id: string;
   attendance_event_id: string;
-  event_type: "check_in" | "check_out";
+  event_type: AttendanceEventType;
   occurred_at: string;
   attendance_date: string;
   duplicated: boolean;
@@ -30,7 +43,7 @@ export function MobileAttendancePage() {
   const isAllowedEmail = session?.user.email?.trim().toLowerCase() === MOBILE_ADMIN_EMAIL;
 
   const mark = useMutation({
-    mutationFn: (event_type: MobileMark["event_type"]) => invokeEdge<MobileMark>("mobile-attendance-mark", {
+    mutationFn: (event_type: AttendanceEventType) => invokeEdge<MobileMark>("mobile-attendance-mark", {
       event_type,
       idempotency_key: crypto.randomUUID()
     }),
@@ -88,11 +101,12 @@ export function MobileAttendancePage() {
           {mark.error && <Alert severity="error">{mark.error.message}</Alert>}
           {lastMark && (
             <Alert severity="success">
-              {lastMark.duplicated ? "La marcación ya estaba registrada." : "Marcación registrada."} {formattedLastMark}
+              {lastMark.duplicated ? `${EVENT_LABELS[lastMark.event_type]} ya registrada.` : `${EVENT_LABELS[lastMark.event_type]} registrada.`} {formattedLastMark}
             </Alert>
           )}
 
           <Stack spacing={1.5}>
+            <Typography variant="subtitle2" color="text.secondary">Selecciona la marcación que deseas registrar</Typography>
             <Button
               variant="contained"
               size="large"
@@ -113,6 +127,50 @@ export function MobileAttendancePage() {
               sx={{ minHeight: 58, fontWeight: 800 }}
             >
               Marcar salida
+            </Button>
+            <Button
+              variant="outlined"
+              size="large"
+              color="inherit"
+              startIcon={<RestaurantRoundedIcon />}
+              onClick={() => mark.mutate("lunch_out")}
+              disabled={mark.isPending}
+              sx={{ minHeight: 58, fontWeight: 800 }}
+            >
+              Marcar salida a almuerzo
+            </Button>
+            <Button
+              variant="outlined"
+              size="large"
+              color="inherit"
+              startIcon={<RestaurantRoundedIcon />}
+              onClick={() => mark.mutate("lunch_in")}
+              disabled={mark.isPending}
+              sx={{ minHeight: 58, fontWeight: 800 }}
+            >
+              Marcar entrada de almuerzo
+            </Button>
+            <Button
+              variant="outlined"
+              size="large"
+              color="inherit"
+              startIcon={<CoffeeRoundedIcon />}
+              onClick={() => mark.mutate("break_out")}
+              disabled={mark.isPending}
+              sx={{ minHeight: 58, fontWeight: 800 }}
+            >
+              Marcar salida a descanso
+            </Button>
+            <Button
+              variant="outlined"
+              size="large"
+              color="inherit"
+              startIcon={<CoffeeRoundedIcon />}
+              onClick={() => mark.mutate("break_in")}
+              disabled={mark.isPending}
+              sx={{ minHeight: 58, fontWeight: 800 }}
+            >
+              Marcar entrada de descanso
             </Button>
           </Stack>
 
